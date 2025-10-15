@@ -396,42 +396,4 @@ export default function FwdFwdApp() {
     </div>
   );
 }
-```
 
-Click **"Commit changes"**
-
----
-
-## **Step 3: Deploy to Vercel (2 minutes)**
-
-**1. Go to Vercel Dashboard**
-- Go to vercel.com/dashboard
-- Click **"Add New..."** → **"Project"**
-
-**2. Import your GitHub repository**
-- You'll see a list of your GitHub repos
-- Find **"fwdfwd-app"**
-- Click **"Import"**
-
-**3. Add Environment Variables**
-- Before clicking "Deploy", expand **"Environment Variables"**
-- Add these two:
-```
-Name: NEXT_PUBLIC_SUPABASE_URL
-Value: https://rdtmuocrdbtpgkifcqdu.supabase.co
-
-Name: NEXT_PUBLIC_SUPABASE_ANON_KEY
-Value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN5Y3NzeGt3eGtiaG1ub216c3diIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0Njg3MzIsImV4cCI6MjA3NjA0NDczMn0.1b7LtIzgBMHQPn4hwn_XPZ0JfLhiLDJ1hrp8wQ-nkQI
-```
-
-**4. Click "Deploy"**
-
-Wait 1-2 minutes... ☕
-
----
-
-## **Step 4: Your App is Live! 🎉**
-
-Once deployed, Vercel will give you a URL like:
-```
-https://fwdfwd-app.vercel.app
