@@ -36,7 +36,6 @@ export default function App() {
     confirmation_number: ''
   });
   const [selectedAddress, setSelectedAddress] = useState('');
-  const autocompleteRef = useState(null);
 
   useEffect(() => {
     checkUser();
@@ -226,25 +225,31 @@ export default function App() {
             <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6 mb-8">
               <div className="mb-8">
                 <h3 className="text-2xl font-bold text-stone-900 mb-2">Your Timeline</h3>
-                <div className="text-stone-600">{travelSteps.length} travel steps</div>
+                <div className="text-stone-600">
+                  {travelSteps.length} {travelSteps.length === 1 ? 'step' : 'steps'}
+                </div>
               </div>
-
               <div className="space-y-6">
-                {travelSteps.map((step, idx) => {
-                  const showDate = idx === 0 || 
-                    formatDate(step.start_datetime) !== formatDate(travelSteps[idx - 1].start_datetime);
+                {travelSteps.reduce((acc, step, index) => {
+                  const stepDate = formatDate(step.start_datetime);
+                  const prevDate = index > 0 ? formatDate(travelSteps[index - 1].start_datetime) : null;
                   
-                  return (
-                    <div key={step.id}>
-                      {showDate && (
-                        <div className="text-sm font-semibold text-stone-700 mb-3">
-                          {formatDate(step.start_datetime)}
-                        </div>
-                      )}
+                  if (stepDate !== prevDate) {
+                    acc.push(
+                      <div key={`date-${index}`}>
+                        <div className="text-sm font-semibold text-stone-700 mb-3">{stepDate}</div>
+                      </div>
+                    );
+                  }
+                  
+                  acc.push(
+                    <div key={step.id || index}>
                       <TravelStepCard step={step} />
                     </div>
                   );
-                })}
+                  
+                  return acc;
+                }, [])}
               </div>
             </div>
           ) : (
