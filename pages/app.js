@@ -9,7 +9,7 @@ const supabase = createClient(
 
 const TRAVEL_TYPES = {
   flight: { icon: FlightIcon, label: 'Flight' },
-  hotel: { icon: HotelIcon, label: 'Hotel' },
+  hotel: { icon: HotelIcon, label: 'Stay' },
   car: { icon: CarIcon, label: 'Rental Car' },
   train: { icon: TrainIcon, label: 'Train' },
   bus: { icon: BusIcon, label: 'Bus' }
@@ -35,6 +35,8 @@ export default function App() {
     carrier_name: '',
     confirmation_number: ''
   });
+  const [selectedAddress, setSelectedAddress] = useState('');
+  const autocompleteRef = useState(null);
 
   useEffect(() => {
     checkUser();
@@ -107,6 +109,7 @@ export default function App() {
         new Date(a.start_datetime) - new Date(b.start_datetime)
       ));
       setShowAddForm(false);
+      setSelectedAddress('');
       setNewStep({
         type: 'flight',
         start_datetime: '',
@@ -119,6 +122,26 @@ export default function App() {
     } else {
       alert('Error adding travel step: ' + error.message);
     }
+  }
+
+  function initAutocomplete(inputRef) {
+    if (!inputRef || !window.google) return;
+    
+    const autocomplete = new window.google.maps.places.Autocomplete(inputRef, {
+      types: ['establishment', 'geocode'],
+      fields: ['name', 'formatted_address', 'address_components', 'place_id']
+    });
+
+    autocomplete.addListener('place_changed', () => {
+      const place = autocomplete.getPlace();
+      if (place && place.formatted_address) {
+        setNewStep({ 
+          ...newStep, 
+          origin_name: place.name || place.formatted_address 
+        });
+        setSelectedAddress(place.formatted_address);
+      }
+    });
   }
 
   function formatDate(datetime) {
@@ -252,17 +275,28 @@ export default function App() {
               <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
                 <h2 className="text-xl font-bold mb-4 text-stone-900">Add Travel Step</h2>
                 <div className="space-y-4">
+                  {/* Type Selector - Pill Tabs */}
                   <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1">Type</label>
-                    <select
-                      value={newStep.type}
-                      onChange={(e) => setNewStep({ ...newStep, type: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg"
-                    >
-                      {Object.entries(TRAVEL_TYPES).map(([key, { label }]) => (
-                        <option key={key} value={key}>{label}</option>
+                    <label className="block text-sm font-medium text-stone-700 mb-2">Type</label>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(TRAVEL_TYPES).map(([key, { label, icon: Icon }]) => (
+                        <button
+                          key={key}
+                          onClick={() => {
+                            setNewStep({ ...newStep, type: key });
+                            setSelectedAddress('');
+                          }}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition ${
+                            newStep.type === key
+                              ? 'bg-stone-900 text-white'
+                              : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                          }`}
+                        >
+                          <Icon />
+                          <span>{label}</span>
+                        </button>
                       ))}
-                    </select>
+                    </div>
                   </div>
 
                   <div>
@@ -273,7 +307,7 @@ export default function App() {
                       type="datetime-local"
                       value={newStep.start_datetime}
                       onChange={(e) => setNewStep({ ...newStep, start_datetime: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
                     />
                   </div>
 
@@ -284,23 +318,51 @@ export default function App() {
                         type="datetime-local"
                         value={newStep.end_datetime}
                         onChange={(e) => setNewStep({ ...newStep, end_datetime: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 rounded-lg"
+                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
                       />
                     </div>
                   )}
 
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1">
-                      {newStep.type === 'hotel' ? 'Hotel Name *' : 'Origin *'}
-                    </label>
-                    <input
-                      type="text"
-                      value={newStep.origin_name}
-                      onChange={(e) => setNewStep({ ...newStep, origin_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg"
-                      placeholder={newStep.type === 'hotel' ? 'Marriott Times Square' : 'SFO'}
-                    />
-                  </div>
+                  {/* Google Places Autocomplete Input for Hotel/Stay */}
+                  {newStep.type === 'hotel' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-stone-700 mb-1">
+                        Where are you staying? *
+                      </label>
+                      <input
+                        ref={(ref) => {
+                          if (ref && showAddForm) {
+                            initAutocomplete(ref);
+                          }
+                        }}
+                        type="text"
+                        value={newStep.origin_name}
+                        onChange={(e) => {
+                          setNewStep({ ...newStep, origin_name: e.target.value });
+                          setSelectedAddress('');
+                        }}
+                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                        placeholder="Search for hotels or enter address..."
+                      />
+                      {selectedAddress && (
+                        <div className="mt-2 p-2 bg-stone-50 rounded-lg border border-stone-200">
+                          <div className="text-xs text-stone-500 mb-1">Address:</div>
+                          <div className="text-sm text-stone-700">{selectedAddress}</div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-sm font-medium text-stone-700 mb-1">Origin *</label>
+                      <input
+                        type="text"
+                        value={newStep.origin_name}
+                        onChange={(e) => setNewStep({ ...newStep, origin_name: e.target.value })}
+                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                        placeholder="SFO"
+                      />
+                    </div>
+                  )}
 
                   {newStep.type !== 'hotel' && (
                     <div>
@@ -309,7 +371,7 @@ export default function App() {
                         type="text"
                         value={newStep.destination_name}
                         onChange={(e) => setNewStep({ ...newStep, destination_name: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 rounded-lg"
+                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
                         placeholder="JFK"
                       />
                     </div>
@@ -323,7 +385,7 @@ export default function App() {
                       type="text"
                       value={newStep.carrier_name}
                       onChange={(e) => setNewStep({ ...newStep, carrier_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
                       placeholder={newStep.type === 'flight' ? 'United Airlines UA 1234' : ''}
                     />
                   </div>
@@ -334,20 +396,23 @@ export default function App() {
                       type="text"
                       value={newStep.confirmation_number}
                       onChange={(e) => setNewStep({ ...newStep, confirmation_number: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
                     />
                   </div>
 
                   <div className="flex gap-2 pt-4">
                     <button
-                      onClick={() => setShowAddForm(false)}
-                      className="flex-1 px-4 py-2 border border-stone-300 rounded-lg text-stone-700 hover:bg-stone-50"
+                      onClick={() => {
+                        setShowAddForm(false);
+                        setSelectedAddress('');
+                      }}
+                      className="flex-1 px-4 py-2 border border-stone-300 rounded-lg text-stone-700 hover:bg-stone-50 transition"
                     >
                       Cancel
                     </button>
                     <button
                       onClick={handleAddStep}
-                      className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800"
+                      className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition"
                     >
                       Add Step
                     </button>
