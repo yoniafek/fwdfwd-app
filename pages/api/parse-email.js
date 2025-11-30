@@ -1,15 +1,17 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
+import { Resend } from 'resend';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Create Supabase client with service role for admin access
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,31 +30,81 @@ export default async function handler(req, res) {
 
     console.log('Processing email from:', senderEmail);
 
-    // Use Claude to parse the email
+    // Use Claude to parse the email with improved prompt
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 2000,
       messages: [{
         role: 'user',
-        content: `You are parsing a travel confirmation email. Extract booking details and return ONLY valid JSON.
+        content: `You are parsing a travel confirmation email. Extract ALL booking details precisely and return ONLY valid JSON.
 
 Email content:
 ${emailContent}
 
+CRITICAL INSTRUCTIONS:
+1. Extract EXACT times from the email - do not invent or approximate
+2. For flights: extract departure AND arrival times for each segment
+3. Include flight numbers in carrier_name (e.g., "United Airlines UA 1234")
+4. Use ISO 8601 format with timezone if available, or use UTC if timezone is unclear
+5. For multi-leg flights, create separate segments for EACH flight
+6. Return ONLY valid JSON with no markdown, explanations, or code blocks
+
 Extract this information:
-- type: "flight", "hotel", "car", "train", or "bus" (or "unknown" if unclear)
-- segments: array of travel segments (for flights with layovers, create separate segments)
-  Each segment should have:
-  - start_datetime: ISO 8601 format
-  - end_datetime: ISO 8601 format (if applicable)
-  - origin_name: departure location/hotel name
-  - destination_name: arrival location (null for hotels)
-  - carrier_name: airline/hotel/company name
-  - confirmation_number: booking reference
+{
+  "type": "flight" | "hotel" | "car" | "train" | "bus" | "unknown",
+  "segments": [
+    {
+      "start_datetime": "YYYY-MM-DDTHH:MM:SSZ",  // Exact departure/check-in time
+      "end_datetime": "YYYY-MM-DDTHH:MM:SSZ",    // Exact arrival/check-out time (REQUIRED for flights)
+      "origin_name": "City/Airport Code",         // e.g., "Newark (EWR)"
+      "destination_name": "City/Airport Code",    // e.g., "Los Angeles (LAX)"
+      "carrier_name": "Airline/Hotel with Number", // e.g., "United Airlines UA 1234"
+      "confirmation_number": "XXXXXX"
+    }
+  ]
+}
 
-CRITICAL: Return ONLY valid JSON. No markdown, no explanations, no code blocks.
+EXAMPLES:
 
-If you cannot extract valid booking details, return:
+Flight with layover:
+{
+  "type": "flight",
+  "segments": [
+    {
+      "start_datetime": "2025-12-15T08:00:00-05:00",
+      "end_datetime": "2025-12-15T11:30:00-06:00",
+      "origin_name": "Newark (EWR)",
+      "destination_name": "Chicago (ORD)",
+      "carrier_name": "United Airlines UA 1234",
+      "confirmation_number": "ABC123"
+    },
+    {
+      "start_datetime": "2025-12-15T14:00:00-06:00",
+      "end_datetime": "2025-12-15T16:45:00-08:00",
+      "origin_name": "Chicago (ORD)",
+      "destination_name": "Los Angeles (LAX)",
+      "carrier_name": "United Airlines UA 5678",
+      "confirmation_number": "ABC123"
+    }
+  ]
+}
+
+Hotel:
+{
+  "type": "hotel",
+  "segments": [
+    {
+      "start_datetime": "2025-12-20T15:00:00-05:00",
+      "end_datetime": "2025-12-23T11:00:00-05:00",
+      "origin_name": "Marriott Downtown NYC",
+      "destination_name": null,
+      "carrier_name": "Marriott",
+      "confirmation_number": "XYZ789"
+    }
+  ]
+}
+
+If you cannot extract valid booking details with confidence, return:
 { "type": "unknown", "segments": [] }`
       }]
     });
@@ -67,32 +119,87 @@ If you cannot extract valid booking details, return:
       if (jsonMatch) {
         parsed = JSON.parse(jsonMatch[1]);
       } else {
+        console.error('Failed to parse Claude response:', responseText);
         throw new Error('Failed to parse Claude response');
       }
     }
 
+    console.log('Claude parsed:', JSON.stringify(parsed, null, 2));
+
+    // Check if parsing was successful
     if (parsed.type === 'unknown' || !parsed.segments || parsed.segments.length === 0) {
-      console.log('Could not parse email');
+      console.log('Could not parse email - sending error notification');
+      
+      // Send error email
+      await resend.emails.send({
+        from: 'FWD <add@fwdfwd.com>',
+        to: senderEmail,
+        subject: 'Unable to Process Your Travel Confirmation',
+        html: `
+          <p>Hi there,</p>
+          
+          <p>We received your email but couldn't automatically extract the booking details. This usually happens when:</p>
+          
+          <ul>
+            <li>The email doesn't contain complete travel information (dates, times, locations)</li>
+            <li>It's not a standard confirmation email format</li>
+            <li>Critical details like confirmation numbers are missing</li>
+          </ul>
+          
+          <p><strong>What to do next:</strong></p>
+          <ul>
+            <li>Forward your original confirmation email from the airline/hotel (not a forwarded copy)</li>
+            <li>Or add your booking manually at <a href="https://fwdfwd.com/app">fwdfwd.com/app</a></li>
+          </ul>
+          
+          <p>If you believe this email should have been processed, please reply and we'll take a look!</p>
+          
+          <p>Thanks,<br>The FWD Team</p>
+        `
+      });
+
       return res.status(200).json({ 
         success: false, 
         message: 'Could not parse email' 
       });
     }
 
-    console.log('Parsed travel type:', parsed.type, 'Segments:', parsed.segments.length);
-
     // Look up user by email using RPC
     const { data: userId, error: rpcError } = await supabase.rpc('get_user_id_by_email', {
       user_email: senderEmail
     });
 
-    console.log('RPC result - userId:', userId, 'error:', rpcError);
+    console.log('User lookup - userId:', userId, 'error:', rpcError);
 
     if (!userId) {
-      console.log('User not found for email:', senderEmail);
+      console.log('User not found - sending signup email');
+      
+      // Send signup email for non-existent users
+      await resend.emails.send({
+        from: 'FWD <add@fwdfwd.com>',
+        to: senderEmail,
+        subject: 'Create Your FWD Account to Track This Trip',
+        html: `
+          <p>Hi there,</p>
+          
+          <p>We received your ${parsed.type} confirmation, but you don't have a FWD account yet!</p>
+          
+          <p><strong>To start tracking your travel:</strong></p>
+          <ol>
+            <li>Create your free account at <a href="https://fwdfwd.com/app">fwdfwd.com/app</a></li>
+            <li>Use this email address: <strong>${senderEmail}</strong></li>
+            <li>Forward your confirmation emails to <strong>add@fwdfwd.com</strong></li>
+          </ol>
+          
+          <p>Once you sign up, simply forward this confirmation again and we'll add it to your timeline automatically!</p>
+          
+          <p>Thanks,<br>The FWD Team</p>
+        `
+      });
+
       return res.status(200).json({
         success: false,
-        message: 'User not found. Please sign up first at fwdfwd.com/app'
+        message: 'User not found. Signup email sent.'
       });
     }
 
@@ -108,7 +215,7 @@ If you cannot extract valid booking details, return:
       confirmation_number: segment.confirmation_number
     }));
 
-    console.log('Inserting travel steps:', travelSteps);
+    console.log('Inserting', travelSteps.length, 'travel steps');
 
     const { error: insertError } = await supabase
       .from('travel_steps')
@@ -119,11 +226,58 @@ If you cannot extract valid booking details, return:
       return res.status(500).json({ error: 'Database error', details: insertError.message });
     }
 
-    console.log('Successfully added', travelSteps.length, 'travel segment(s)');
+    console.log('Successfully added travel steps');
+
+    // Format segments for email
+    const segmentDescriptions = parsed.segments.map(seg => {
+      if (parsed.type === 'flight') {
+        const dept = new Date(seg.start_datetime).toLocaleString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric', 
+          hour: 'numeric', minute: '2-digit', timeZoneName: 'short' 
+        });
+        const arr = seg.end_datetime ? new Date(seg.end_datetime).toLocaleString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric', 
+          hour: 'numeric', minute: '2-digit', timeZoneName: 'short' 
+        }) : 'TBD';
+        return `${seg.carrier_name}: ${seg.origin_name} → ${seg.destination_name}<br>Departs: ${dept}<br>Arrives: ${arr}`;
+      } else if (parsed.type === 'hotel') {
+        const checkin = new Date(seg.start_datetime).toLocaleDateString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric' 
+        });
+        const checkout = seg.end_datetime ? new Date(seg.end_datetime).toLocaleDateString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric' 
+        }) : 'TBD';
+        return `${seg.origin_name}<br>Check-in: ${checkin}<br>Check-out: ${checkout}`;
+      }
+      return `${seg.origin_name} → ${seg.destination_name || ''}`;
+    }).join('<br><br>');
+
+    // Send success confirmation email
+    await resend.emails.send({
+      from: 'FWD <add@fwdfwd.com>',
+      to: senderEmail,
+      subject: `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added`,
+      html: `
+        <p>Hi!</p>
+        
+        <p>Your ${parsed.type} has been added to your travel timeline.</p>
+        
+        <p><strong>Details:</strong></p>
+        <p>${segmentDescriptions}</p>
+        
+        ${parsed.segments.length > 1 ? `<p><em>Added ${parsed.segments.length} segments to your journey</em></p>` : ''}
+        
+        <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #000; color: #fff; text-decoration: none; border-radius: 6px; margin-top: 16px;">View Your Timeline</a></p>
+        
+        <p style="margin-top: 24px; font-size: 14px; color: #666;">Keep forwarding your confirmations to <strong>add@fwdfwd.com</strong> to build your timeline!</p>
+        
+        <p>Thanks,<br>The FWD Team</p>
+      `
+    });
 
     return res.status(200).json({ 
       success: true, 
-      message: 'Email processed successfully',
+      message: 'Email processed and confirmation sent',
       segmentsAdded: parsed.segments.length
     });
 
