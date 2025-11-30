@@ -95,23 +95,8 @@ If you cannot extract valid booking details, return:
 
     // Check if parsing was successful
     if (parsed.type === 'unknown' || !parsed.segments || parsed.segments.length === 0) {
-      // Send error email
-      await sendEmail(
-        senderEmail,
-        'Unable to Process Your Travel Confirmation',
-        `Hi there,
-
-We received your email but couldn't automatically extract the booking details.
-
-Please either:
-- Forward a complete confirmation email with dates and booking details
-- Add your booking manually at https://fwdfwd.com/app
-
-If you believe this is an error, please reply with your confirmation details.
-
-Thanks,
-The FWD Team`
-      );
+      // Send error email (placeholder for now)
+      console.log(`Would send error email to ${senderEmail}`);
 
       return res.status(200).json({ 
         success: false, 
@@ -119,18 +104,29 @@ The FWD Team`
       });
     }
 
-    // Check if user exists
-    const { data: existingUser } = await supabase
-      .from('profiles')
-      .select('id, email')
-      .eq('email', senderEmail)
-      .single();
+    // Look up user by email in auth.users using RPC function
+    // First, we need to check if user exists by trying to query their travel steps
+    // If they have an account, we'll get their user ID from the auth context
+    
+    // Get user ID by checking auth.users via a custom query
+    const { data: authUsers, error: authError } = await supabase.rpc('get_user_id_by_email', {
+      user_email: senderEmail
+    });
 
     let userId;
     let isNewUser = false;
 
-    if (!existingUser) {
-      // Create pending user profile
+    if (authUsers && authUsers.length > 0) {
+      // Existing auth user
+      userId = authUsers[0].id;
+      isNewUser = false;
+    } else {
+      // New user - create a pending profile
+      // But we need an auth user ID, so we'll create a placeholder
+      // For now, we'll just use the email as a temporary identifier
+      // and the user will need to sign up to claim their bookings
+      
+      // Create pending profile
       const { data: newProfile, error: profileError } = await supabase
         .from('profiles')
         .insert([{ 
@@ -147,8 +143,6 @@ The FWD Team`
 
       userId = newProfile.id;
       isNewUser = true;
-    } else {
-      userId = existingUser.id;
     }
 
     // Add all segments to timeline
@@ -169,44 +163,12 @@ The FWD Team`
 
     if (insertError) {
       console.error('Error inserting travel steps:', insertError);
-      return res.status(500).json({ error: 'Database error' });
+      return res.status(500).json({ error: 'Database error', details: insertError.message });
     }
 
-    // Send confirmation email
-    if (isNewUser) {
-      await sendEmail(
-        senderEmail,
-        'Your Travel Timeline is Ready!',
-        `Hi there!
-
-We've saved your ${parsed.type} booking to your travel timeline.
-
-To view and manage your timeline, create your account here:
-https://fwdfwd.com/app
-
-Your email (${senderEmail}) is already registered - just set a password to get started.
-
-Thanks,
-The FWD Team
-
-P.S. Forward more confirmations to add@fwdfwd.com to keep building your timeline!`
-      );
-    } else {
-      await sendEmail(
-        senderEmail,
-        `Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added!`,
-        `Hi!
-
-Your ${parsed.type} has been added to your timeline.
-
-View it now: https://fwdfwd.com/app
-
-${parsed.segments.length > 1 ? `Added ${parsed.segments.length} segments to your journey.` : ''}
-
-Thanks,
-The FWD Team`
-      );
-    }
+    // Send confirmation email (placeholder)
+    console.log(`Would send confirmation email to ${senderEmail}`);
+    console.log(`Added ${travelSteps.length} travel segment(s)`);
 
     return res.status(200).json({ 
       success: true, 
@@ -217,14 +179,6 @@ The FWD Team`
 
   } catch (error) {
     console.error('Error processing email:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error', details: error.message });
   }
-}
-
-// Email sending function (placeholder - we'll implement this next)
-async function sendEmail(to, subject, body) {
-  // TODO: Implement actual email sending via Cloudflare or SendGrid
-  console.log(`Would send email to ${to}:`);
-  console.log(`Subject: ${subject}`);
-  console.log(`Body: ${body}`);
 }
