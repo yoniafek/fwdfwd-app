@@ -30,6 +30,25 @@ export default async function handler(req, res) {
 
     console.log('Processing email from:', senderEmail);
 
+    // FIRST: Store the raw email for 30 days
+    const { data: storedEmail, error: storeError } = await supabase
+      .from('raw_emails')
+      .insert([{
+        sender_email: senderEmail,
+        subject: subject,
+        html_content: html,
+        text_content: text
+      }])
+      .select()
+      .single();
+
+    if (storeError) {
+      console.error('Error storing email:', storeError);
+      // Continue processing even if storage fails
+    } else {
+      console.log('Stored raw email with ID:', storedEmail.id);
+    }
+
     // Use Claude to parse the email with improved prompt
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -120,17 +139,39 @@ If you cannot extract valid booking details with confidence, return:
         parsed = JSON.parse(jsonMatch[1]);
       } else {
         console.error('Failed to parse Claude response:', responseText);
+        
+        // Update stored email with error
+        if (storedEmail) {
+          await supabase
+            .from('raw_emails')
+            .update({ 
+              processed: true,
+              processing_error: 'Failed to parse Claude response'
+            })
+            .eq('id', storedEmail.id);
+        }
+        
         throw new Error('Failed to parse Claude response');
       }
     }
 
     console.log('Claude parsed:', JSON.stringify(parsed, null, 2));
 
+    // Update stored email with parsed data
+    if (storedEmail) {
+      await supabase
+        .from('raw_emails')
+        .update({ 
+          parsed_data: parsed,
+          processed: parsed.type !== 'unknown'
+        })
+        .eq('id', storedEmail.id);
+    }
+
     // Check if parsing was successful
     if (parsed.type === 'unknown' || !parsed.segments || parsed.segments.length === 0) {
       console.log('Could not parse email - sending error notification');
       
-      // Send error email
       await resend.emails.send({
         from: 'FWD <add@fwdfwd.com>',
         to: senderEmail,
@@ -164,7 +205,7 @@ If you cannot extract valid booking details with confidence, return:
       });
     }
 
-    // Look up user by email using RPC
+    // Look up user
     const { data: userId, error: rpcError } = await supabase.rpc('get_user_id_by_email', {
       user_email: senderEmail
     });
@@ -174,7 +215,6 @@ If you cannot extract valid booking details with confidence, return:
     if (!userId) {
       console.log('User not found - sending signup email');
       
-      // Send signup email for non-existent users
       await resend.emails.send({
         from: 'FWD <add@fwdfwd.com>',
         to: senderEmail,
@@ -203,7 +243,7 @@ If you cannot extract valid booking details with confidence, return:
       });
     }
 
-    // Add all segments to timeline
+    // Add segments to timeline
     const travelSteps = parsed.segments.map(segment => ({
       user_id: userId,
       type: parsed.type,
@@ -252,7 +292,6 @@ If you cannot extract valid booking details with confidence, return:
       return `${seg.origin_name} → ${seg.destination_name || ''}`;
     }).join('<br><br>');
 
-    // Send success confirmation email
     await resend.emails.send({
       from: 'FWD <add@fwdfwd.com>',
       to: senderEmail,

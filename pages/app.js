@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { FlightIcon, HotelIcon, CarIcon, TrainIcon, BusIcon, ChevronIcon, PlusIcon, LogoutIcon } from '../components/Icons';
+import { FlightIcon, HotelIcon, CarIcon, TrainIcon, BusIcon, ChevronIcon, PlusIcon, LogoutIcon, TrashIcon, EditIcon } from '../components/Icons';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -26,6 +26,7 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   
+  const [editingStep, setEditingStep] = useState(null);
   const [newStep, setNewStep] = useState({
     type: 'flight',
     start_datetime: '',
@@ -98,29 +99,94 @@ export default function App() {
       return;
     }
 
-    const { data, error } = await supabase
-      .from('travel_steps')
-      .insert([{ ...newStep, user_id: user.id }])
-      .select();
-    
-    if (!error) {
-      setTravelSteps([...travelSteps, ...data].sort((a, b) => 
-        new Date(a.start_datetime) - new Date(b.start_datetime)
-      ));
-      setShowAddForm(false);
-      setSelectedAddress('');
-      setNewStep({
-        type: 'flight',
-        start_datetime: '',
-        end_datetime: '',
-        origin_name: '',
-        destination_name: '',
-        carrier_name: '',
-        confirmation_number: ''
-      });
+    if (editingStep) {
+      // Update existing step
+      const { data, error } = await supabase
+        .from('travel_steps')
+        .update({
+          type: newStep.type,
+          start_datetime: newStep.start_datetime,
+          end_datetime: newStep.end_datetime,
+          origin_name: newStep.origin_name,
+          destination_name: newStep.destination_name,
+          carrier_name: newStep.carrier_name,
+          confirmation_number: newStep.confirmation_number
+        })
+        .eq('id', editingStep.id)
+        .select();
+
+      if (!error) {
+        setTravelSteps(travelSteps.map(step => 
+          step.id === editingStep.id ? data[0] : step
+        ).sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime)));
+        setShowAddForm(false);
+        setEditingStep(null);
+        setSelectedAddress('');
+        resetForm();
+      } else {
+        alert('Error updating travel step: ' + error.message);
+      }
     } else {
-      alert('Error adding travel step: ' + error.message);
+      // Add new step
+      const { data, error } = await supabase
+        .from('travel_steps')
+        .insert([{ ...newStep, user_id: user.id }])
+        .select();
+      
+      if (!error) {
+        setTravelSteps([...travelSteps, ...data].sort((a, b) => 
+          new Date(a.start_datetime) - new Date(b.start_datetime)
+        ));
+        setShowAddForm(false);
+        setSelectedAddress('');
+        resetForm();
+      } else {
+        alert('Error adding travel step: ' + error.message);
+      }
     }
+  }
+
+  async function handleDeleteStep(stepId) {
+    if (!confirm('Are you sure you want to delete this travel step?')) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from('travel_steps')
+      .delete()
+      .eq('id', stepId);
+
+    if (!error) {
+      setTravelSteps(travelSteps.filter(step => step.id !== stepId));
+    } else {
+      alert('Error deleting travel step: ' + error.message);
+    }
+  }
+
+  function handleEditStep(step) {
+    setEditingStep(step);
+    setNewStep({
+      type: step.type,
+      start_datetime: step.start_datetime,
+      end_datetime: step.end_datetime || '',
+      origin_name: step.origin_name,
+      destination_name: step.destination_name || '',
+      carrier_name: step.carrier_name || '',
+      confirmation_number: step.confirmation_number || ''
+    });
+    setShowAddForm(true);
+  }
+
+  function resetForm() {
+    setNewStep({
+      type: 'flight',
+      start_datetime: '',
+      end_datetime: '',
+      origin_name: '',
+      destination_name: '',
+      carrier_name: '',
+      confirmation_number: ''
+    });
   }
 
   function initAutocomplete(inputRef) {
@@ -151,16 +217,43 @@ export default function App() {
     return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
   }
 
+  function formatTime(datetime) {
+    if (!datetime) return '';
+    const date = new Date(datetime);
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
   function TravelStepCard({ step }) {
     const TypeIcon = TRAVEL_TYPES[step.type].icon;
-    const startDate = new Date(step.start_datetime);
-    const time = startDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const startTime = formatTime(step.start_datetime);
+    const endTime = step.end_datetime ? formatTime(step.end_datetime) : null;
 
     return (
-      <div className="bg-stone-50 rounded-xl p-4 border border-stone-200">
+      <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative">
+        {/* Edit/Delete buttons - show on hover */}
+        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+          <button
+            onClick={() => handleEditStep(step)}
+            className="p-2 bg-white rounded-lg border border-stone-300 hover:bg-stone-100 transition"
+            title="Edit"
+          >
+            <EditIcon />
+          </button>
+          <button
+            onClick={() => handleDeleteStep(step.id)}
+            className="p-2 bg-white rounded-lg border border-stone-300 hover:bg-red-50 hover:border-red-300 transition"
+            title="Delete"
+          >
+            <TrashIcon />
+          </button>
+        </div>
+
         <div className="flex items-start gap-4">
           <div className="flex-shrink-0 w-12 text-right">
-            <div className="text-sm font-medium text-stone-900">{time}</div>
+            <div className="text-sm font-medium text-stone-900">{startTime}</div>
+            {endTime && step.type === 'flight' && (
+              <div className="text-xs text-stone-500 mt-1">→ {endTime}</div>
+            )}
           </div>
           <div className="flex-shrink-0 text-stone-700">
             <TypeIcon />
@@ -182,6 +275,11 @@ export default function App() {
               {step.confirmation_number && (
                 <div className="text-xs text-stone-500 mt-1">
                   Confirmation: {step.confirmation_number}
+                </div>
+              )}
+              {endTime && step.type === 'hotel' && (
+                <div className="text-xs text-stone-500 mt-1">
+                  Check-out: {endTime}
                 </div>
               )}
             </div>
@@ -268,7 +366,11 @@ export default function App() {
 
           {!showAddForm && (
             <button
-              onClick={() => setShowAddForm(true)}
+              onClick={() => {
+                setEditingStep(null);
+                resetForm();
+                setShowAddForm(true);
+              }}
               className="fixed bottom-6 right-6 bg-stone-900 text-white p-4 rounded-full shadow-lg hover:bg-stone-800 transition"
             >
               <PlusIcon />
@@ -278,9 +380,11 @@ export default function App() {
           {showAddForm && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
               <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-                <h2 className="text-xl font-bold mb-4 text-stone-900">Add Travel Step</h2>
+                <h2 className="text-xl font-bold mb-4 text-stone-900">
+                  {editingStep ? 'Edit Travel Step' : 'Add Travel Step'}
+                </h2>
                 <div className="space-y-4">
-                  {/* Type Selector - Pill Tabs */}
+                  {/* Type Selector */}
                   <div>
                     <label className="block text-sm font-medium text-stone-700 mb-2">Type</label>
                     <div className="flex flex-wrap gap-2">
@@ -316,9 +420,11 @@ export default function App() {
                     />
                   </div>
 
-                  {newStep.type === 'hotel' && (
+                  {(newStep.type === 'hotel' || newStep.type === 'flight') && (
                     <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Check-out Date & Time</label>
+                      <label className="block text-sm font-medium text-stone-700 mb-1">
+                        {newStep.type === 'hotel' ? 'Check-out' : 'Arrival'} Date & Time
+                      </label>
                       <input
                         type="datetime-local"
                         value={newStep.end_datetime}
@@ -328,7 +434,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Google Places Autocomplete Input for Hotel/Stay */}
+                  {/* Google Places Autocomplete for Hotel */}
                   {newStep.type === 'hotel' ? (
                     <div>
                       <label className="block text-sm font-medium text-stone-700 mb-1">
@@ -409,7 +515,9 @@ export default function App() {
                     <button
                       onClick={() => {
                         setShowAddForm(false);
+                        setEditingStep(null);
                         setSelectedAddress('');
+                        resetForm();
                       }}
                       className="flex-1 px-4 py-2 border border-stone-300 rounded-lg text-stone-700 hover:bg-stone-50 transition"
                     >
@@ -419,7 +527,7 @@ export default function App() {
                       onClick={handleAddStep}
                       className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition"
                     >
-                      Add Step
+                      {editingStep ? 'Update Step' : 'Add Step'}
                     </button>
                   </div>
                 </div>
