@@ -5,6 +5,7 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// Create Supabase client with service role for admin access
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -16,7 +17,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Parse the incoming email from Cloudflare
     const { from, subject, text, html } = req.body;
     
     if (!from || (!text && !html)) {
@@ -25,6 +25,8 @@ export default async function handler(req, res) {
 
     const emailContent = html || text;
     const senderEmail = from.toLowerCase();
+
+    console.log('Processing email from:', senderEmail);
 
     // Use Claude to parse the email
     const message = await anthropic.messages.create({
@@ -50,29 +52,6 @@ Extract this information:
 
 CRITICAL: Return ONLY valid JSON. No markdown, no explanations, no code blocks.
 
-Example for multi-segment flight:
-{
-  "type": "flight",
-  "segments": [
-    {
-      "start_datetime": "2025-12-01T14:00:00Z",
-      "end_datetime": null,
-      "origin_name": "San Francisco (SFO)",
-      "destination_name": "Chicago (ORD)",
-      "carrier_name": "United Airlines UA 1234",
-      "confirmation_number": "ABC123"
-    },
-    {
-      "start_datetime": "2025-12-01T18:30:00Z",
-      "end_datetime": null,
-      "origin_name": "Chicago (ORD)",
-      "destination_name": "New York (JFK)",
-      "carrier_name": "United Airlines UA 5678",
-      "confirmation_number": "ABC123"
-    }
-  ]
-}
-
 If you cannot extract valid booking details, return:
 { "type": "unknown", "segments": [] }`
       }]
@@ -84,7 +63,6 @@ If you cannot extract valid booking details, return:
     try {
       parsed = JSON.parse(responseText);
     } catch (e) {
-      // Try to extract JSON from markdown code blocks
       const jsonMatch = responseText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
       if (jsonMatch) {
         parsed = JSON.parse(jsonMatch[1]);
@@ -93,56 +71,29 @@ If you cannot extract valid booking details, return:
       }
     }
 
-    // Check if parsing was successful
     if (parsed.type === 'unknown' || !parsed.segments || parsed.segments.length === 0) {
-      // Send error email (placeholder for now)
-      console.log(`Would send error email to ${senderEmail}`);
-
+      console.log('Could not parse email');
       return res.status(200).json({ 
         success: false, 
         message: 'Could not parse email' 
       });
     }
 
-    // Look up user by email in auth.users using RPC function
-    // First, we need to check if user exists by trying to query their travel steps
-    // If they have an account, we'll get their user ID from the auth context
-    
-    // Get user ID by checking auth.users via a custom query
-    const { data: authUsers, error: authError } = await supabase.rpc('get_user_id_by_email', {
+    console.log('Parsed travel type:', parsed.type, 'Segments:', parsed.segments.length);
+
+    // Look up user by email using RPC
+    const { data: userId, error: rpcError } = await supabase.rpc('get_user_id_by_email', {
       user_email: senderEmail
     });
 
-    let userId;
-    let isNewUser = false;
+    console.log('RPC result - userId:', userId, 'error:', rpcError);
 
-    if (authUsers && authUsers.length > 0) {
-      // Existing auth user
-      userId = authUsers[0].id;
-      isNewUser = false;
-    } else {
-      // New user - create a pending profile
-      // But we need an auth user ID, so we'll create a placeholder
-      // For now, we'll just use the email as a temporary identifier
-      // and the user will need to sign up to claim their bookings
-      
-      // Create pending profile
-      const { data: newProfile, error: profileError } = await supabase
-        .from('profiles')
-        .insert([{ 
-          email: senderEmail,
-          pending: true 
-        }])
-        .select()
-        .single();
-
-      if (profileError) {
-        console.error('Error creating profile:', profileError);
-        return res.status(500).json({ error: 'Database error' });
-      }
-
-      userId = newProfile.id;
-      isNewUser = true;
+    if (!userId) {
+      console.log('User not found for email:', senderEmail);
+      return res.status(200).json({
+        success: false,
+        message: 'User not found. Please sign up first at fwdfwd.com/app'
+      });
     }
 
     // Add all segments to timeline
@@ -157,6 +108,8 @@ If you cannot extract valid booking details, return:
       confirmation_number: segment.confirmation_number
     }));
 
+    console.log('Inserting travel steps:', travelSteps);
+
     const { error: insertError } = await supabase
       .from('travel_steps')
       .insert(travelSteps);
@@ -166,14 +119,11 @@ If you cannot extract valid booking details, return:
       return res.status(500).json({ error: 'Database error', details: insertError.message });
     }
 
-    // Send confirmation email (placeholder)
-    console.log(`Would send confirmation email to ${senderEmail}`);
-    console.log(`Added ${travelSteps.length} travel segment(s)`);
+    console.log('Successfully added', travelSteps.length, 'travel segment(s)');
 
     return res.status(200).json({ 
       success: true, 
       message: 'Email processed successfully',
-      isNewUser,
       segmentsAdded: parsed.segments.length
     });
 
