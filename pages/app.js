@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import { 
   getSupabase, 
@@ -46,17 +46,14 @@ export default function App() {
       return false;
     }
 
-    // Check immediately
     if (checkGoogleMaps()) return;
 
-    // Check again after script might have loaded
     const interval = setInterval(() => {
       if (checkGoogleMaps()) {
         clearInterval(interval);
       }
     }, 500);
 
-    // Stop checking after 10 seconds
     const timeout = setTimeout(() => {
       clearInterval(interval);
     }, 10000);
@@ -85,6 +82,13 @@ export default function App() {
 
     return () => authListener?.subscription?.unsubscribe();
   }, []);
+
+  // Check flight statuses on load for flights within 48 hours
+  useEffect(() => {
+    if (travelSteps.length > 0) {
+      checkFlightStatuses();
+    }
+  }, [travelSteps.length]); // Only run when steps are first loaded
 
   async function checkUser() {
     try {
@@ -117,6 +121,78 @@ export default function App() {
     }
   }
 
+  // Check statuses for flights within 48 hours (on page load)
+  async function checkFlightStatuses() {
+    const now = new Date();
+    
+    const flightsToCheck = travelSteps.filter(step => {
+      if (step.type !== 'flight') return false;
+      
+      const departure = new Date(step.start_datetime);
+      const arrival = step.end_datetime ? new Date(step.end_datetime) : null;
+      
+      // Skip if already landed
+      if (arrival && arrival < now) return false;
+      
+      // Only check if within 48 hours
+      const hoursToDeparture = (departure - now) / (1000 * 60 * 60);
+      if (hoursToDeparture > 48 || hoursToDeparture < -24) return false;
+      
+      // Skip if recently checked (within last hour)
+      if (step.flight_status_checked_at) {
+        const lastChecked = new Date(step.flight_status_checked_at);
+        const hoursSinceCheck = (now - lastChecked) / (1000 * 60 * 60);
+        if (hoursSinceCheck < 1) return false;
+      }
+      
+      return true;
+    });
+
+    // Check flights in sequence to avoid rate limiting
+    for (const flight of flightsToCheck) {
+      await refreshFlightStatus(flight.id, false);
+      // Small delay between API calls
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  // Refresh flight status (called manually or on load)
+  const refreshFlightStatus = useCallback(async (stepId, forceRefresh = true) => {
+    try {
+      const response = await fetch('/api/flight-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stepId, forceRefresh })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.status) {
+        // Update the local state with new status
+        setTravelSteps(prev => 
+          prev.map(s => s.id === stepId 
+            ? { 
+                ...s, 
+                flight_status: data.status,
+                flight_status_checked_at: new Date().toISOString(),
+                // Update gate/terminal if returned
+                ...(data.flightInfo?.departure?.gate && !s.origin_gate && { origin_gate: data.flightInfo.departure.gate }),
+                ...(data.flightInfo?.departure?.terminal && !s.origin_terminal && { origin_terminal: data.flightInfo.departure.terminal }),
+                ...(data.flightInfo?.arrival?.gate && !s.destination_gate && { destination_gate: data.flightInfo.arrival.gate }),
+                ...(data.flightInfo?.arrival?.terminal && !s.destination_terminal && { destination_terminal: data.flightInfo.arrival.terminal })
+              } 
+            : s
+          )
+        );
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Error refreshing flight status:', error);
+      return null;
+    }
+  }, []);
+
   async function handleSignOut() {
     try {
       await supabaseSignOut();
@@ -132,7 +208,6 @@ export default function App() {
   async function handleSaveStep(stepData) {
     try {
       if (stepData.id) {
-        // Update existing
         const updated = await updateTravelStep(stepData.id, stepData);
         
         setTravelSteps(prev => 
@@ -140,7 +215,6 @@ export default function App() {
             .sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime))
         );
       } else {
-        // Create new
         const created = await createTravelStep(user.id, stepData);
         
         setTravelSteps(prev => 
@@ -173,7 +247,6 @@ export default function App() {
 
   async function handleMoveToTrip(stepId, tripId) {
     if (tripId === null) {
-      // Create new trip
       const step = travelSteps.find(s => s.id === stepId);
       if (!step) return;
 
@@ -262,6 +335,7 @@ export default function App() {
               onEditStep={handleEditStep}
               onDeleteStep={handleDeleteStep}
               onMoveToTrip={handleMoveToTrip}
+              onRefreshFlightStatus={refreshFlightStatus}
             />
 
             {/* Floating Add Button */}

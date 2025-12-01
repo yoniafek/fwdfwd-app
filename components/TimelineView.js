@@ -9,6 +9,7 @@ export default function TimelineView({
   onEditStep, 
   onDeleteStep,
   onMoveToTrip,
+  onRefreshFlightStatus,
   isSharedView = false,
   emptyMessage = null
 }) {
@@ -68,6 +69,7 @@ export default function TimelineView({
                     onEdit={onEditStep}
                     onDelete={onDeleteStep}
                     onMoveToTrip={onMoveToTrip}
+                    onRefreshFlightStatus={onRefreshFlightStatus}
                     isSharedView={isSharedView}
                   />
                   
