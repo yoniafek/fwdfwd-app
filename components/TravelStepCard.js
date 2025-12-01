@@ -74,6 +74,14 @@ function RefreshIcon() {
   );
 }
 
+function SmallChevronIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+    </svg>
+  );
+}
+
 // Generate Google Maps search URL for an airport
 function getAirportUrl(airportCode, cityName) {
   if (airportCode) {
@@ -85,35 +93,69 @@ function getAirportUrl(airportCode, cityName) {
   return null;
 }
 
-// Generate FlightAware tracking URL
-function getFlightAwareUrl(carrierName, departureDate) {
+// Extract flight code from carrier name
+function extractFlightCode(carrierName) {
   if (!carrierName) return null;
   
-  // Extract flight code from carrier_name like "United • UA 1234" or "UA1234"
-  const flightMatch = carrierName.match(/([A-Z]{2,3})\s*(\d{1,4})/i);
-  if (!flightMatch) return null;
+  // Handle formats like:
+  // "United • UA 2011"
+  // "Alaska • AS 293"
+  // "United Airlines UA 1234"
+  // "UA1234"
+  // "UA 1234"
   
-  const flightCode = `${flightMatch[1].toUpperCase()}${flightMatch[2]}`;
+  // Remove bullet/dot characters and extra spaces
+  const cleaned = carrierName.replace(/[•·]/g, ' ').replace(/\s+/g, ' ').trim();
+  
+  // Try to match airline code + flight number
+  const match = cleaned.match(/([A-Z]{2})\s*(\d{1,4})/i);
+  if (match) {
+    return `${match[1].toUpperCase()}${match[2]}`;
+  }
+  
+  return null;
+}
+
+// Generate FlightAware tracking URL
+function getFlightAwareUrl(carrierName, departureDate) {
+  const flightCode = extractFlightCode(carrierName);
+  if (!flightCode) return null;
   
   // Format date for FlightAware URL
   let dateStr = '';
   if (departureDate) {
-    const date = new Date(departureDate);
-    if (!isNaN(date.getTime())) {
-      dateStr = `/${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
+    // Extract date from ISO string
+    const dateMatch = departureDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (dateMatch) {
+      dateStr = `/${dateMatch[1]}/${dateMatch[2]}/${dateMatch[3]}`;
     }
   }
   
   return `https://www.flightaware.com/live/flight/${flightCode}${dateStr}`;
 }
 
-// Check if flight is within 48 hours
-function isWithin48Hours(departureDate) {
-  if (!departureDate) return false;
-  const departure = new Date(departureDate);
+// Check flight timing status
+function getFlightTimingStatus(departureDate, arrivalDate) {
+  if (!departureDate) return { canShowStatus: false, isLanded: false, isWithin48Hours: false };
+  
   const now = new Date();
-  const hoursDiff = (departure - now) / (1000 * 60 * 60);
-  return hoursDiff <= 48 && hoursDiff >= -24; // Within 48hr future or 24hr past
+  const departure = new Date(departureDate);
+  const arrival = arrivalDate ? new Date(arrivalDate) : null;
+  
+  // Check if flight has landed (arrival time has passed)
+  if (arrival && arrival < now) {
+    return { canShowStatus: true, isLanded: true, isWithin48Hours: false };
+  }
+  
+  // Check if within 48 hours of departure
+  const hoursToDeparture = (departure - now) / (1000 * 60 * 60);
+  const isWithin48Hours = hoursToDeparture <= 48 && hoursToDeparture > -24;
+  
+  return { 
+    canShowStatus: isWithin48Hours || (arrival && arrival < now), 
+    isLanded: false, 
+    isWithin48Hours 
+  };
 }
 
 // Clickable location link for flights (links to airport)
@@ -171,51 +213,66 @@ function LocationLink({ name, lat, lng, address, className = '' }) {
   return content;
 }
 
-// Flight status badge component
-function FlightStatusBadge({ status, flightAwareUrl, showRefresh, onRefresh }) {
-  const statusColors = {
-    'on_time': 'text-green-600',
-    'delayed': 'text-red-600',
-    'landed': 'text-stone-600',
-    'cancelled': 'text-red-600',
-    'unknown': 'text-stone-400'
-  };
+// Flight info row - clickable to FlightAware
+function FlightInfoRow({ carrierName, departureDate, arrivalDate, flightStatus, onRefreshStatus, isSharedView }) {
+  const flightAwareUrl = getFlightAwareUrl(carrierName, departureDate);
+  const { canShowStatus, isLanded, isWithin48Hours } = getFlightTimingStatus(departureDate, arrivalDate);
   
-  const statusLabels = {
-    'on_time': 'On time',
-    'delayed': 'Delayed',
-    'landed': 'Landed',
-    'cancelled': 'Cancelled'
-  };
+  // Determine display status
+  let displayStatus = null;
+  if (canShowStatus) {
+    if (isLanded) {
+      displayStatus = { label: 'Landed', color: 'text-stone-600' };
+    } else if (flightStatus === 'on_time') {
+      displayStatus = { label: 'On time', color: 'text-green-600' };
+    } else if (flightStatus === 'delayed') {
+      displayStatus = { label: 'Delayed', color: 'text-red-600' };
+    }
+  }
   
-  return (
-    <span className="inline-flex items-center gap-2 ml-2">
-      {status && statusLabels[status] && (
-        <span className={`text-sm font-medium ${statusColors[status] || statusColors.unknown}`}>
-          {statusLabels[status]}
-        </span>
-      )}
-      {flightAwareUrl && (
-        <a 
-          href={flightAwareUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm text-stone-500 hover:text-stone-700 underline"
-        >
-          View
-        </a>
-      )}
-      {showRefresh && onRefresh && (
-        <button 
-          onClick={onRefresh}
-          className="p-1 text-stone-400 hover:text-stone-600 transition-colors"
-          title="Refresh status"
-        >
-          <RefreshIcon />
-        </button>
-      )}
-    </span>
+  const content = (
+    <div className="flex items-center justify-between">
+      <span>
+        Flight <span className="font-medium">{carrierName}</span>
+        {displayStatus && (
+          <span className={`ml-2 font-medium ${displayStatus.color}`}>
+            {displayStatus.label}
+          </span>
+        )}
+      </span>
+      <span className="flex items-center gap-1">
+        {isWithin48Hours && !isLanded && onRefreshStatus && (
+          <button 
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRefreshStatus();
+            }}
+            className="p-1 text-stone-400 hover:text-stone-600 transition-colors"
+            title="Refresh status"
+          >
+            <RefreshIcon />
+          </button>
+        )}
+        <SmallChevronIcon />
+      </span>
+    </div>
   );
+  
+  if (flightAwareUrl) {
+    return (
+      <a 
+        href={flightAwareUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block hover:bg-stone-100 -mx-1 px-1 rounded transition-colors"
+      >
+        {content}
+      </a>
+    );
+  }
+  
+  return <div>{content}</div>;
 }
 
 export default function TravelStepCard({ 
@@ -287,9 +344,6 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, onRefreshFlightStatu
   const { name: destName, code: destCode } = parseLocationWithCode(step.destination_name);
   
   const { duration, timezoneOffset } = calculateFlightDuration(step.start_datetime, step.end_datetime);
-  
-  const flightAwareUrl = getFlightAwareUrl(step.carrier_name, step.start_datetime);
-  const showFlightStatus = isWithin48Hours(step.start_datetime);
 
   return (
     <div className="bg-stone-50 rounded-xl border border-stone-200 group relative hover:border-stone-300 transition overflow-hidden">
@@ -321,29 +375,16 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, onRefreshFlightStatu
               {!isSharedView && step.confirmation_number && (
                 <div>Confirmation <span className="font-medium">{step.confirmation_number}</span></div>
               )}
-              {/* Flight carrier and number with status */}
+              {/* Flight carrier and number - clickable row */}
               {step.carrier_name && (
-                <div className="flex items-center flex-wrap">
-                  <span>Flight <span className="font-medium">{step.carrier_name}</span></span>
-                  {showFlightStatus && (
-                    <FlightStatusBadge 
-                      status={step.flight_status}
-                      flightAwareUrl={flightAwareUrl}
-                      showRefresh={showFlightStatus}
-                      onRefresh={() => onRefreshFlightStatus?.(step.id)}
-                    />
-                  )}
-                  {!showFlightStatus && flightAwareUrl && (
-                    <a 
-                      href={flightAwareUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-2 text-sm text-stone-500 hover:text-stone-700 underline"
-                    >
-                      View
-                    </a>
-                  )}
-                </div>
+                <FlightInfoRow 
+                  carrierName={step.carrier_name}
+                  departureDate={step.start_datetime}
+                  arrivalDate={step.end_datetime}
+                  flightStatus={step.flight_status}
+                  onRefreshStatus={() => onRefreshFlightStatus?.(step.id)}
+                  isSharedView={isSharedView}
+                />
               )}
               {/* Terminal and Gate */}
               <div className="flex gap-4">
@@ -392,13 +433,8 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, onRefreshFlightStatu
 function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const nights = calculateNights(step.start_datetime, step.end_datetime);
   
-  // Determine if this is a hotel or a home/other stay
   const isHotel = detectIfHotel(step.origin_name, step.origin_address);
-  
-  // Get display title: custom_title > origin_name > extracted street address
   const displayTitle = step.custom_title || step.origin_name || extractStreetAddress(step.origin_address);
-  
-  // Get location for address subtitle - show city/state part or full address
   const addressSubtitle = getAddressSubtitle(step.origin_address, step.origin_name);
 
   return (
@@ -415,7 +451,6 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
       />
 
       <div className="flex items-start gap-4">
-        {/* Nights in same position as time for flights */}
         <div className="flex-shrink-0 w-16 text-right">
           {nights && (
             <div className="text-sm text-stone-600">{nights} night{nights !== 1 ? 's' : ''}</div>
@@ -431,7 +466,6 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
             lng={step.origin_lng}
             address={step.origin_address}
           />
-          {/* Address subtitle - always show if available */}
           {addressSubtitle && (
             <div className="text-sm text-stone-500 mt-0.5">{addressSubtitle}</div>
           )}
@@ -586,12 +620,9 @@ function ActionMenu({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
 }
 
 // Helper functions
-
-// Format time without timezone conversion - extract hour:minute from ISO string
 function formatTimeRaw(datetime) {
   if (!datetime) return '';
   
-  // If it's an ISO string with time, extract the time part directly
   if (typeof datetime === 'string') {
     const timeMatch = datetime.match(/T(\d{2}):(\d{2})/);
     if (timeMatch) {
@@ -698,7 +729,6 @@ function extractTimezoneOffset(datetimeStr) {
   return null;
 }
 
-// Detect if a location is likely a hotel
 function detectIfHotel(name, address) {
   if (!name && !address) return false;
   
@@ -714,7 +744,6 @@ function detectIfHotel(name, address) {
   return hotelKeywords.some(keyword => searchText.includes(keyword));
 }
 
-// Extract street address from full address for display as title
 function extractStreetAddress(fullAddress) {
   if (!fullAddress) return 'Stay';
   
@@ -726,20 +755,15 @@ function extractStreetAddress(fullAddress) {
   return fullAddress;
 }
 
-// Get address subtitle (city, state) for stays
 function getAddressSubtitle(fullAddress, originName) {
   if (!fullAddress) return null;
   
-  // If the address is the same as the name, extract city/state portion
   const parts = fullAddress.split(',').map(p => p.trim());
   
   if (parts.length >= 2) {
-    // Return everything after the first part (street address)
-    // e.g., "123 Main St, Teaneck, NJ 07666" -> "Teaneck, NJ 07666"
     return parts.slice(1).join(', ');
   }
   
-  // If address equals name, don't show it as subtitle
   if (fullAddress === originName) return null;
   
   return fullAddress;
