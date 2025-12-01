@@ -26,23 +26,28 @@ export default async function handler(req, res) {
     }
 
     // Check if we have a recent cached status (within 1 hour)
-    const { data: existingStep } = await supabase
-      .from('travel_steps')
-      .select('flight_status, flight_status_checked_at')
-      .eq('id', stepId)
-      .single();
+    // Note: This will fail silently if columns don't exist yet
+    try {
+      const { data: existingStep } = await supabase
+        .from('travel_steps')
+        .select('flight_status, flight_status_checked_at')
+        .eq('id', stepId)
+        .single();
 
-    if (existingStep?.flight_status_checked_at) {
-      const lastChecked = new Date(existingStep.flight_status_checked_at);
-      const hoursSinceCheck = (Date.now() - lastChecked) / (1000 * 60 * 60);
-      
-      if (hoursSinceCheck < 1 && existingStep.flight_status) {
-        console.log('Using cached status:', existingStep.flight_status);
-        return res.status(200).json({ 
-          status: existingStep.flight_status,
-          cached: true
-        });
+      if (existingStep?.flight_status_checked_at) {
+        const lastChecked = new Date(existingStep.flight_status_checked_at);
+        const hoursSinceCheck = (Date.now() - lastChecked) / (1000 * 60 * 60);
+        
+        if (hoursSinceCheck < 1 && existingStep.flight_status) {
+          console.log('Using cached status:', existingStep.flight_status);
+          return res.status(200).json({ 
+            status: existingStep.flight_status,
+            cached: true
+          });
+        }
       }
+    } catch (cacheError) {
+      console.log('Could not check cache (column may not exist):', cacheError.message);
     }
 
     // Call AviationStack API
@@ -123,32 +128,36 @@ export default async function handler(req, res) {
       console.log('No flight data returned from API');
     }
 
-    // Update the database with the new status
-    if (status) {
-      const { error: updateError } = await supabase
-        .from('travel_steps')
-        .update({
-          flight_status: status,
-          flight_status_checked_at: new Date().toISOString(),
-          // Update gate/terminal if we got new info
-          ...(flightInfo?.departure?.gate && { origin_gate: flightInfo.departure.gate }),
-          ...(flightInfo?.departure?.terminal && { origin_terminal: flightInfo.departure.terminal }),
-          ...(flightInfo?.arrival?.gate && { destination_gate: flightInfo.arrival.gate }),
-          ...(flightInfo?.arrival?.terminal && { destination_terminal: flightInfo.arrival.terminal })
-        })
-        .eq('id', stepId);
+    // Update the database with the new status (defensive - may fail if columns don't exist)
+    try {
+      if (status) {
+        const { error: updateError } = await supabase
+          .from('travel_steps')
+          .update({
+            flight_status: status,
+            flight_status_checked_at: new Date().toISOString(),
+            // Update gate/terminal if we got new info
+            ...(flightInfo?.departure?.gate && { origin_gate: flightInfo.departure.gate }),
+            ...(flightInfo?.departure?.terminal && { origin_terminal: flightInfo.departure.terminal }),
+            ...(flightInfo?.arrival?.gate && { destination_gate: flightInfo.arrival.gate }),
+            ...(flightInfo?.arrival?.terminal && { destination_terminal: flightInfo.arrival.terminal })
+          })
+          .eq('id', stepId);
 
-      if (updateError) {
-        console.error('Error updating flight status:', updateError);
+        if (updateError) {
+          console.error('Error updating flight status:', updateError);
+        }
+      } else {
+        // Just update the checked timestamp
+        await supabase
+          .from('travel_steps')
+          .update({
+            flight_status_checked_at: new Date().toISOString()
+          })
+          .eq('id', stepId);
       }
-    } else {
-      // Just update the checked timestamp
-      await supabase
-        .from('travel_steps')
-        .update({
-          flight_status_checked_at: new Date().toISOString()
-        })
-        .eq('id', stepId);
+    } catch (dbUpdateError) {
+      console.error('Could not update database (columns may not exist):', dbUpdateError.message);
     }
 
     return res.status(200).json({

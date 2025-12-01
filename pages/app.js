@@ -159,10 +159,22 @@ export default function App() {
   // Refresh flight status (called manually or on load)
   const refreshFlightStatus = useCallback(async (stepId, forceRefresh = true) => {
     try {
+      // Find the step to get flight details
+      const step = travelSteps.find(s => s.id === stepId);
+      if (!step || step.type !== 'flight') {
+        console.error('Step not found or not a flight:', stepId);
+        return null;
+      }
+
       const response = await fetch('/api/flight-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stepId, forceRefresh })
+        body: JSON.stringify({ 
+          stepId, 
+          flightNumber: step.carrier_name,
+          departureDate: step.start_datetime,
+          forceRefresh 
+        })
       });
       
       const data = await response.json();
@@ -191,7 +203,7 @@ export default function App() {
       console.error('Error refreshing flight status:', error);
       return null;
     }
-  }, []);
+  }, [travelSteps]);
 
   async function handleSignOut() {
     try {
@@ -206,16 +218,28 @@ export default function App() {
 
   // Step CRUD operations
   async function handleSaveStep(stepData) {
+    console.log('handleSaveStep called with:', stepData);
+    
     try {
       if (stepData.id) {
+        console.log('Updating existing step:', stepData.id);
         const updated = await updateTravelStep(stepData.id, stepData);
+        console.log('Update successful, received:', updated);
+        
+        if (!updated) {
+          throw new Error('No data returned from update');
+        }
         
         setTravelSteps(prev => 
           prev.map(s => s.id === updated.id ? updated : s)
             .sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime))
         );
+        
+        console.log('State updated successfully');
       } else {
+        console.log('Creating new step');
         const created = await createTravelStep(user.id, stepData);
+        console.log('Create successful, received:', created);
         
         setTravelSteps(prev => 
           [...prev, created].sort((a, b) => 
@@ -227,7 +251,7 @@ export default function App() {
       closeModal();
     } catch (error) {
       console.error('Error saving step:', error);
-      alert('Error saving travel step: ' + error.message);
+      alert('Error saving travel step: ' + (error.message || 'Unknown error'));
     }
   }
 
