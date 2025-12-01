@@ -175,10 +175,23 @@ export default function AddEditStepModal({
       return;
     }
 
-    onSave({
+    // Convert datetime-local format to ISO string with seconds
+    const formatDatetime = (dt) => {
+      if (!dt) return null;
+      // datetime-local is YYYY-MM-DDTHH:MM, add seconds if missing
+      if (dt.length === 16) return dt + ':00';
+      return dt;
+    };
+
+    const submitData = {
       ...formData,
+      start_datetime: formatDatetime(formData.start_datetime),
+      end_datetime: formatDatetime(formData.end_datetime),
       id: step?.id
-    });
+    };
+
+    console.log('Submitting step data:', submitData);
+    onSave(submitData);
   }
 
   function updateField(field, value) {

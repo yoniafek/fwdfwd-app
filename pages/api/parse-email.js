@@ -30,22 +30,28 @@ export default async function handler(req, res) {
 
     console.log('Processing email from:', senderEmail);
 
-    // FIRST: Store the raw email for 30 days
-    const { data: storedEmail, error: storeError } = await supabase
-      .from('raw_emails')
-      .insert([{
-        sender_email: senderEmail,
-        subject: subject,
-        html_content: html,
-        text_content: text
-      }])
-      .select()
-      .single();
+    // FIRST: Try to store the raw email for 30 days (non-blocking)
+    let storedEmail = null;
+    try {
+      const { data, error: storeError } = await supabase
+        .from('raw_emails')
+        .insert([{
+          sender_email: senderEmail,
+          subject: subject,
+          html_content: html,
+          text_content: text
+        }])
+        .select()
+        .single();
 
-    if (storeError) {
-      console.error('Error storing email:', storeError);
-    } else {
-      console.log('Stored raw email with ID:', storedEmail.id);
+      if (storeError) {
+        console.error('Error storing email (non-blocking):', storeError.message);
+      } else {
+        storedEmail = data;
+        console.log('Stored raw email with ID:', storedEmail.id);
+      }
+    } catch (emailStoreError) {
+      console.error('Exception storing email (non-blocking):', emailStoreError.message);
     }
 
     // Use Claude to parse the email with improved prompt
