@@ -34,10 +34,14 @@ export default function AddEditStepModal({
     origin_address: '',
     origin_lat: null,
     origin_lng: null,
+    origin_terminal: '',
+    origin_gate: '',
     destination_name: '',
     destination_address: '',
     destination_lat: null,
     destination_lng: null,
+    destination_terminal: '',
+    destination_gate: '',
     carrier_name: '',
     confirmation_number: ''
   });
@@ -52,10 +56,14 @@ export default function AddEditStepModal({
         origin_address: step.origin_address || '',
         origin_lat: step.origin_lat || null,
         origin_lng: step.origin_lng || null,
+        origin_terminal: step.origin_terminal || '',
+        origin_gate: step.origin_gate || '',
         destination_name: step.destination_name || '',
         destination_address: step.destination_address || '',
         destination_lat: step.destination_lat || null,
         destination_lng: step.destination_lng || null,
+        destination_terminal: step.destination_terminal || '',
+        destination_gate: step.destination_gate || '',
         carrier_name: step.carrier_name || '',
         confirmation_number: step.confirmation_number || ''
       });
@@ -144,13 +152,23 @@ export default function AddEditStepModal({
         destination_name: '',
         destination_address: '',
         destination_lat: null,
-        destination_lng: null
+        destination_lng: null,
+        destination_terminal: '',
+        destination_gate: ''
+      }),
+      // Clear terminal/gate for non-flights
+      ...(newType !== 'flight' && {
+        origin_terminal: '',
+        origin_gate: '',
+        destination_terminal: '',
+        destination_gate: ''
       })
     }));
   }
 
   const showEndDateTime = ['hotel', 'flight', 'car'].includes(formData.type);
   const showDestination = !['hotel', 'restaurant', 'activity'].includes(formData.type);
+  const showTerminalGate = formData.type === 'flight';
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
@@ -232,7 +250,6 @@ export default function AddEditStepModal({
               value={formData.origin_name}
               onChange={(e) => {
                 updateField('origin_name', e.target.value);
-                // Clear coordinates when manually typing
                 updateField('origin_lat', null);
                 updateField('origin_lng', null);
                 updateField('origin_address', '');
@@ -252,6 +269,36 @@ export default function AddEditStepModal({
               </div>
             )}
           </div>
+
+          {/* Origin Terminal & Gate (flights only) */}
+          {showTerminalGate && (
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-stone-700 mb-1">
+                  Terminal
+                </label>
+                <input
+                  type="text"
+                  value={formData.origin_terminal}
+                  onChange={(e) => updateField('origin_terminal', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                  placeholder="A"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-stone-700 mb-1">
+                  Gate
+                </label>
+                <input
+                  type="text"
+                  value={formData.origin_gate}
+                  onChange={(e) => updateField('origin_gate', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                  placeholder="12"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Destination */}
           {showDestination && (
@@ -281,6 +328,36 @@ export default function AddEditStepModal({
                   <div className="text-sm text-stone-700">{formData.destination_address}</div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Destination Terminal & Gate (flights only) */}
+          {showTerminalGate && showDestination && (
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-stone-700 mb-1">
+                  Arrival Terminal
+                </label>
+                <input
+                  type="text"
+                  value={formData.destination_terminal}
+                  onChange={(e) => updateField('destination_terminal', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                  placeholder="B"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-stone-700 mb-1">
+                  Arrival Gate
+                </label>
+                <input
+                  type="text"
+                  value={formData.destination_gate}
+                  onChange={(e) => updateField('destination_gate', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                  placeholder="5"
+                />
+              </div>
             </div>
           )}
 

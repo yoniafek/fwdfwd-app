@@ -56,14 +56,53 @@ function CircleIcon() {
   );
 }
 
-// Clickable location link component
-function LocationLink({ name, code, lat, lng, className = '' }) {
-  const url = getLocationUrl(lat, lng, name);
+// Generate Google Maps search URL for an airport
+function getAirportUrl(airportCode, cityName) {
+  if (airportCode) {
+    // Search for airport by code
+    return `https://www.google.com/maps/search/${encodeURIComponent(airportCode + ' airport')}`;
+  }
+  if (cityName) {
+    return `https://www.google.com/maps/search/${encodeURIComponent(cityName + ' airport')}`;
+  }
+  return null;
+}
+
+// Clickable location link component for flights (links to airport)
+function AirportLink({ name, code, className = '' }) {
+  const url = getAirportUrl(code, name);
   
   const content = (
-    <span className={`inline-flex items-center gap-1.5 ${className}`}>
+    <span className={`inline-flex items-center gap-2 ${className}`}>
       <span className="font-semibold text-stone-900">{name}</span>
       {code && <span className="text-xs text-stone-500 font-mono uppercase">{code}</span>}
+      <ChevronIcon />
+    </span>
+  );
+  
+  if (url) {
+    return (
+      <a 
+        href={url} 
+        target="_blank" 
+        rel="noopener noreferrer"
+        className="hover:text-stone-600 transition-colors"
+      >
+        {content}
+      </a>
+    );
+  }
+  
+  return content;
+}
+
+// Clickable location link component for non-flights
+function LocationLink({ name, lat, lng, address, className = '' }) {
+  const url = getLocationUrl(lat, lng, address || name);
+  
+  const content = (
+    <span className={`inline-flex items-center gap-2 ${className}`}>
+      <span className="font-semibold text-stone-900">{name}</span>
       <ChevronIcon />
     </span>
   );
@@ -145,14 +184,17 @@ export default function TravelStepCard({
   );
 }
 
-// Flight card with connected departure/arrival design
+// Flight card with connected departure/arrival design matching mockup
 function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const startTime = formatTime(step.start_datetime);
   const endTime = step.end_datetime ? formatTime(step.end_datetime) : null;
   
-  // Parse origin/destination for airport codes
+  // Parse origin/destination for city name and airport code
   const { name: originName, code: originCode } = parseLocationWithCode(step.origin_name);
   const { name: destName, code: destCode } = parseLocationWithCode(step.destination_name);
+  
+  // Calculate flight duration and timezone offset
+  const { duration, timezoneOffset } = calculateFlightDuration(step.start_datetime, step.end_datetime);
 
   return (
     <div className="bg-stone-50 rounded-xl border border-stone-200 group relative hover:border-stone-300 transition overflow-hidden">
@@ -177,26 +219,25 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
             <FlightIcon />
           </div>
           <div className="flex-1 min-w-0">
-            <LocationLink 
-              name={originName} 
-              code={originCode}
-              lat={step.origin_lat}
-              lng={step.origin_lng}
-            />
+            <AirportLink name={originName} code={originCode} />
+            
             <div className="text-sm text-stone-600 space-y-0.5 mt-1">
+              {/* Flight carrier and number */}
               {step.carrier_name && (
                 <div>Flight <span className="font-medium">{step.carrier_name}</span></div>
               )}
+              
+              {/* Terminal and Gate row */}
               <div className="flex gap-4">
-                {step.origin_terminal && (
-                  <span>Terminal <span className="font-medium">{step.origin_terminal}</span></span>
-                )}
-                {step.origin_gate && (
-                  <span>Gate <span className="font-medium">{step.origin_gate}</span></span>
-                )}
+                <span>Terminal <span className="font-medium">{step.origin_terminal || '–'}</span></span>
+                <span>Gate <span className="font-medium">{step.origin_gate || '–'}</span></span>
               </div>
-              {step.duration && (
-                <div>Duration <span className="font-medium">{step.duration}</span></div>
+              
+              {/* Duration with timezone offset */}
+              {duration && (
+                <div>
+                  Duration <span className="font-medium">{duration}{timezoneOffset && ` (${timezoneOffset})`}</span>
+                </div>
               )}
             </div>
           </div>
@@ -205,8 +246,8 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
 
       {/* Arrival */}
       {step.destination_name && (
-        <div className="p-4 pt-0 border-t border-stone-200 mt-0">
-          <div className="flex items-start gap-4 pt-4">
+        <div className="px-4 pb-4 pt-4 border-t border-stone-200">
+          <div className="flex items-start gap-4">
             <div className="flex-shrink-0 w-16 text-right">
               <div className="text-sm font-semibold text-stone-900">{endTime || '–'}</div>
             </div>
@@ -214,20 +255,12 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
               <CircleIcon />
             </div>
             <div className="flex-1 min-w-0 ml-1">
-              <LocationLink 
-                name={destName} 
-                code={destCode}
-                lat={step.destination_lat}
-                lng={step.destination_lng}
-              />
+              <AirportLink name={destName} code={destCode} />
+              
               <div className="text-sm text-stone-600 mt-0.5">
                 <div className="flex gap-4">
-                  {step.destination_terminal && (
-                    <span>Terminal <span className="font-medium">{step.destination_terminal}</span></span>
-                  )}
-                  {step.destination_gate && (
-                    <span>Gate <span className="font-medium">{step.destination_gate || '–'}</span></span>
-                  )}
+                  <span>Terminal <span className="font-medium">{step.destination_terminal || '–'}</span></span>
+                  <span>Gate <span className="font-medium">{step.destination_gate || '–'}</span></span>
                 </div>
               </div>
             </div>
@@ -235,11 +268,11 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
         </div>
       )}
 
-      {/* Confirmation (owner only) */}
+      {/* Confirmation (owner only) - subtle at bottom */}
       {!isSharedView && step.confirmation_number && (
-        <div className="px-4 pb-3 pt-0">
-          <div className="text-xs text-stone-400 font-mono ml-20">
-            Conf: {step.confirmation_number}
+        <div className="px-4 pb-3 border-t border-stone-100">
+          <div className="text-xs text-stone-400 font-mono pt-2">
+            Confirmation: {step.confirmation_number}
           </div>
         </div>
       )}
@@ -278,14 +311,15 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
               name={step.origin_name} 
               lat={step.origin_lat}
               lng={step.origin_lng}
+              address={step.origin_address}
             />
           </div>
           {step.origin_address && (
             <div className="text-sm text-stone-500 mt-0.5">{step.origin_address}</div>
           )}
           {!isSharedView && step.confirmation_number && (
-            <div className="text-xs text-stone-400 font-mono mt-1">
-              Conf: {step.confirmation_number}
+            <div className="text-xs text-stone-400 font-mono mt-2">
+              Confirmation: {step.confirmation_number}
             </div>
           )}
         </div>
@@ -324,6 +358,7 @@ function DefaultCard({ step, typeConfig, TypeIcon, onEdit, onDelete, onMoveToTri
               name={step.origin_name || typeConfig.label} 
               lat={step.origin_lat}
               lng={step.origin_lng}
+              address={step.origin_address}
             />
             {step.destination_name && (
               <>
@@ -332,6 +367,7 @@ function DefaultCard({ step, typeConfig, TypeIcon, onEdit, onDelete, onMoveToTri
                   name={step.destination_name} 
                   lat={step.destination_lat}
                   lng={step.destination_lng}
+                  address={step.destination_address}
                 />
               </>
             )}
@@ -345,7 +381,7 @@ function DefaultCard({ step, typeConfig, TypeIcon, onEdit, onDelete, onMoveToTri
             )}
             {!isSharedView && step.confirmation_number && (
               <div className="text-xs text-stone-400 font-mono mt-1">
-                Conf: {step.confirmation_number}
+                Confirmation: {step.confirmation_number}
               </div>
             )}
           </div>
@@ -444,21 +480,27 @@ function formatTime(datetime) {
     hour: 'numeric', 
     minute: '2-digit', 
     hour12: true 
-  }).replace(' ', '').toUpperCase();
+  }).replace(' ', '').toLowerCase();
 }
 
 function parseLocationWithCode(locationStr) {
   if (!locationStr) return { name: '', code: '' };
   
-  // Try to extract airport code like "San Francisco (SFO)" or "Newark EWR"
+  // Try to extract airport code like "San Francisco (SFO)" or "San Francisco SFO"
   const parenMatch = locationStr.match(/^(.+?)\s*\(([A-Z]{3})\)$/);
   if (parenMatch) {
     return { name: parenMatch[1].trim(), code: parenMatch[2] };
   }
   
+  // Match "City ABC" pattern at end
   const spaceMatch = locationStr.match(/^(.+?)\s+([A-Z]{3})$/);
   if (spaceMatch) {
     return { name: spaceMatch[1].trim(), code: spaceMatch[2] };
+  }
+  
+  // Check if the whole string is just an airport code
+  if (/^[A-Z]{3}$/.test(locationStr.trim())) {
+    return { name: locationStr.trim(), code: locationStr.trim() };
   }
   
   return { name: locationStr, code: '' };
@@ -473,4 +515,70 @@ function calculateNights(startDatetime, endDatetime) {
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
   return diffDays > 0 ? diffDays : null;
+}
+
+function calculateFlightDuration(startDatetime, endDatetime) {
+  if (!startDatetime || !endDatetime) {
+    return { duration: null, timezoneOffset: null };
+  }
+  
+  const start = new Date(startDatetime);
+  const end = new Date(endDatetime);
+  
+  // Calculate actual elapsed time in minutes
+  const diffMs = end - start;
+  const diffMinutes = Math.round(diffMs / (1000 * 60));
+  
+  if (diffMinutes <= 0) {
+    return { duration: null, timezoneOffset: null };
+  }
+  
+  // Format duration as "Xhr YYmin" or just "Xhr" if no minutes
+  const hours = Math.floor(diffMinutes / 60);
+  const minutes = diffMinutes % 60;
+  
+  let duration;
+  if (minutes === 0) {
+    duration = `${hours}hr`;
+  } else {
+    duration = `${hours}hr${minutes.toString().padStart(2, '0')}`;
+  }
+  
+  // Try to detect timezone offset from the datetime strings
+  // If both have timezone info, we can calculate the difference
+  let timezoneOffset = null;
+  
+  // Check if the original strings contain timezone offset info
+  // Format could be: "2025-12-15T08:00:00-05:00" or "2025-12-15T08:00:00Z"
+  const startTz = extractTimezoneOffset(startDatetime);
+  const endTz = extractTimezoneOffset(endDatetime);
+  
+  if (startTz !== null && endTz !== null && startTz !== endTz) {
+    const tzDiff = endTz - startTz;
+    const sign = tzDiff >= 0 ? '+' : '';
+    timezoneOffset = `${sign}${tzDiff}hr`;
+  }
+  
+  return { duration, timezoneOffset };
+}
+
+// Extract timezone offset in hours from ISO string
+function extractTimezoneOffset(datetimeStr) {
+  if (!datetimeStr || typeof datetimeStr !== 'string') return null;
+  
+  // Match timezone offset like "-05:00" or "+03:00" or "Z"
+  const tzMatch = datetimeStr.match(/([+-])(\d{2}):(\d{2})$/);
+  if (tzMatch) {
+    const sign = tzMatch[1] === '+' ? 1 : -1;
+    const hours = parseInt(tzMatch[2], 10);
+    const minutes = parseInt(tzMatch[3], 10);
+    return sign * (hours + minutes / 60);
+  }
+  
+  // Z means UTC (0 offset)
+  if (datetimeStr.endsWith('Z')) {
+    return 0;
+  }
+  
+  return null;
 }
