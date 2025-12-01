@@ -1,6 +1,7 @@
 import React from 'react';
 import TravelStepCard from './TravelStepCard';
-import { FlightIcon } from './Icons';
+import { FlightIcon, ChevronIcon } from './Icons';
+import { calculateDistance, formatDistance, getDirectionsUrl } from '../lib/distance';
 
 export default function TimelineView({ 
   steps = [], 
@@ -54,29 +55,82 @@ export default function TimelineView({
       <div className="space-y-6">
         {groupedSteps.map(({ date, dateLabel, steps: daySteps }) => (
           <div key={date}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="text-sm font-semibold text-stone-700">
-                {dateLabel}
-              </div>
-              <div className="flex-1 h-px bg-stone-200" />
+            <div className="text-sm font-semibold text-stone-700 mb-3">
+              {dateLabel}
             </div>
             
-            <div className="space-y-3">
-              {daySteps.map((step) => (
-                <TravelStepCard
-                  key={step.id}
-                  step={step}
-                  trips={trips}
-                  onEdit={onEditStep}
-                  onDelete={onDeleteStep}
-                  onMoveToTrip={onMoveToTrip}
-                  isSharedView={isSharedView}
-                />
+            <div className="space-y-0">
+              {daySteps.map((step, index) => (
+                <div key={step.id}>
+                  <TravelStepCard
+                    step={step}
+                    trips={trips}
+                    onEdit={onEditStep}
+                    onDelete={onDeleteStep}
+                    onMoveToTrip={onMoveToTrip}
+                    isSharedView={isSharedView}
+                  />
+                  
+                  {/* Distance connector between same-day events */}
+                  {index < daySteps.length - 1 && (
+                    <DistanceConnector 
+                      fromStep={step} 
+                      toStep={daySteps[index + 1]} 
+                    />
+                  )}
+                </div>
               ))}
             </div>
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Distance connector between two events
+function DistanceConnector({ fromStep, toStep }) {
+  // Get the "end" location of the from step (destination for flights, origin for stays)
+  const fromLat = fromStep.destination_lat || fromStep.origin_lat;
+  const fromLng = fromStep.destination_lng || fromStep.origin_lng;
+  const fromName = fromStep.destination_name || fromStep.origin_name;
+  
+  // Get the "start" location of the to step
+  const toLat = toStep.origin_lat;
+  const toLng = toStep.origin_lng;
+  const toName = toStep.origin_name;
+  
+  // Calculate distance
+  const distance = calculateDistance(fromLat, fromLng, toLat, toLng);
+  const distanceText = formatDistance(distance);
+  
+  // Generate directions URL
+  const directionsUrl = getDirectionsUrl(fromLat, fromLng, toLat, toLng, fromName, toName);
+  
+  // Don't show if we can't calculate distance or if locations are the same
+  if (distance === null || distance < 0.05) {
+    return <div className="h-3" />; // Small spacer
+  }
+  
+  const isShortWalk = distance < 0.3;
+  
+  return (
+    <div className="flex items-center justify-center py-3">
+      <div className="flex-1 h-px bg-stone-200 ml-20" />
+      <a
+        href={directionsUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="px-3 py-1.5 text-sm text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-full transition-colors flex items-center gap-1"
+      >
+        {isShortWalk ? (
+          <span>Short walk</span>
+        ) : (
+          <span>{distanceText} • view directions</span>
+        )}
+        <ChevronIcon />
+      </a>
+      <div className="flex-1 h-px bg-stone-200 mr-4" />
     </div>
   );
 }
@@ -98,6 +152,11 @@ function groupStepsByDate(steps) {
     }
     
     groups.get(dateKey).steps.push(step);
+  });
+  
+  // Sort steps within each day by time
+  groups.forEach(group => {
+    group.steps.sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime));
   });
   
   return Array.from(groups.values());
@@ -166,4 +225,3 @@ export function TripSummary({ steps }) {
     </span>
   );
 }
-

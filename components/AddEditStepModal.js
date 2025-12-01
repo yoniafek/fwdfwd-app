@@ -1,5 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { TRAVEL_TYPES } from './TravelStepCard';
+import { 
+  FlightIcon, 
+  HotelIcon, 
+  CarIcon, 
+  TrainIcon, 
+  BusIcon 
+} from './Icons';
+
+const TYPE_OPTIONS = [
+  { key: 'flight', label: 'Flight', icon: FlightIcon },
+  { key: 'hotel', label: 'Stay', icon: HotelIcon },
+  { key: 'car', label: 'Car', icon: CarIcon },
+  { key: 'train', label: 'Train', icon: TrainIcon },
+  { key: 'bus', label: 'Bus', icon: BusIcon },
+];
 
 export default function AddEditStepModal({ 
   step = null, 
@@ -8,15 +23,21 @@ export default function AddEditStepModal({
   googleMapsLoaded = false 
 }) {
   const isEditing = !!step;
-  const inputRef = useRef(null);
-  const [selectedAddress, setSelectedAddress] = useState('');
+  const originInputRef = useRef(null);
+  const destInputRef = useRef(null);
   
   const [formData, setFormData] = useState({
     type: 'flight',
     start_datetime: '',
     end_datetime: '',
     origin_name: '',
+    origin_address: '',
+    origin_lat: null,
+    origin_lng: null,
     destination_name: '',
+    destination_address: '',
+    destination_lat: null,
+    destination_lng: null,
     carrier_name: '',
     confirmation_number: ''
   });
@@ -28,33 +49,73 @@ export default function AddEditStepModal({
         start_datetime: step.start_datetime || '',
         end_datetime: step.end_datetime || '',
         origin_name: step.origin_name || '',
+        origin_address: step.origin_address || '',
+        origin_lat: step.origin_lat || null,
+        origin_lng: step.origin_lng || null,
         destination_name: step.destination_name || '',
+        destination_address: step.destination_address || '',
+        destination_lat: step.destination_lat || null,
+        destination_lng: step.destination_lng || null,
         carrier_name: step.carrier_name || '',
         confirmation_number: step.confirmation_number || ''
       });
     }
   }, [step]);
 
-  // Initialize Google Places autocomplete for hotel type
+  // Initialize Google Places autocomplete for origin
   useEffect(() => {
-    if (formData.type === 'hotel' && googleMapsLoaded && inputRef.current && window.google) {
-      const autocomplete = new window.google.maps.places.Autocomplete(inputRef.current, {
-        types: ['establishment', 'geocode'],
-        fields: ['name', 'formatted_address', 'address_components', 'place_id']
-      });
+    if (!googleMapsLoaded || !window.google || !originInputRef.current) return;
+    
+    const autocomplete = new window.google.maps.places.Autocomplete(originInputRef.current, {
+      types: formData.type === 'flight' ? ['airport'] : ['establishment', 'geocode'],
+      fields: ['name', 'formatted_address', 'geometry', 'place_id']
+    });
 
-      autocomplete.addListener('place_changed', () => {
-        const place = autocomplete.getPlace();
-        if (place && place.formatted_address) {
-          setFormData(prev => ({ 
-            ...prev, 
-            origin_name: place.name || place.formatted_address 
-          }));
-          setSelectedAddress(place.formatted_address);
-        }
-      });
-    }
-  }, [formData.type, googleMapsLoaded]);
+    autocomplete.addListener('place_changed', () => {
+      const place = autocomplete.getPlace();
+      if (place && place.geometry) {
+        setFormData(prev => ({ 
+          ...prev, 
+          origin_name: place.name || place.formatted_address,
+          origin_address: place.formatted_address || '',
+          origin_lat: place.geometry.location.lat(),
+          origin_lng: place.geometry.location.lng()
+        }));
+      }
+    });
+
+    return () => {
+      window.google.maps.event.clearInstanceListeners(autocomplete);
+    };
+  }, [googleMapsLoaded, formData.type]);
+
+  // Initialize Google Places autocomplete for destination
+  useEffect(() => {
+    if (!googleMapsLoaded || !window.google || !destInputRef.current) return;
+    if (formData.type === 'hotel' || formData.type === 'restaurant') return;
+    
+    const autocomplete = new window.google.maps.places.Autocomplete(destInputRef.current, {
+      types: formData.type === 'flight' ? ['airport'] : ['establishment', 'geocode'],
+      fields: ['name', 'formatted_address', 'geometry', 'place_id']
+    });
+
+    autocomplete.addListener('place_changed', () => {
+      const place = autocomplete.getPlace();
+      if (place && place.geometry) {
+        setFormData(prev => ({ 
+          ...prev, 
+          destination_name: place.name || place.formatted_address,
+          destination_address: place.formatted_address || '',
+          destination_lat: place.geometry.location.lat(),
+          destination_lng: place.geometry.location.lng()
+        }));
+      }
+    });
+
+    return () => {
+      window.google.maps.event.clearInstanceListeners(autocomplete);
+    };
+  }, [googleMapsLoaded, formData.type]);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -72,12 +133,22 @@ export default function AddEditStepModal({
 
   function updateField(field, value) {
     setFormData(prev => ({ ...prev, [field]: value }));
-    if (field === 'type') {
-      setSelectedAddress('');
-    }
   }
 
-  const typeConfig = TRAVEL_TYPES[formData.type];
+  function handleTypeChange(newType) {
+    setFormData(prev => ({ 
+      ...prev, 
+      type: newType,
+      // Clear destination for types that don't use it
+      ...(newType === 'hotel' && {
+        destination_name: '',
+        destination_address: '',
+        destination_lat: null,
+        destination_lng: null
+      })
+    }));
+  }
+
   const showEndDateTime = ['hotel', 'flight', 'car'].includes(formData.type);
   const showDestination = !['hotel', 'restaurant', 'activity'].includes(formData.type);
 
@@ -95,11 +166,11 @@ export default function AddEditStepModal({
               Type
             </label>
             <div className="flex flex-wrap gap-2">
-              {Object.entries(TRAVEL_TYPES).slice(0, 5).map(([key, { label, icon: Icon }]) => (
+              {TYPE_OPTIONS.map(({ key, label, icon: Icon }) => (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => updateField('type', key)}
+                  onClick={() => handleTypeChange(key)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition ${
                     formData.type === key
                       ? 'bg-stone-900 text-white'
@@ -152,38 +223,33 @@ export default function AddEditStepModal({
               {formData.type === 'hotel' ? 'Hotel / Address' :
                formData.type === 'restaurant' ? 'Restaurant' :
                formData.type === 'activity' ? 'Location' :
+               formData.type === 'flight' ? 'Departure Airport' :
                'Origin'} *
             </label>
-            {formData.type === 'hotel' ? (
-              <>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={formData.origin_name}
-                  onChange={(e) => {
-                    updateField('origin_name', e.target.value);
-                    setSelectedAddress('');
-                  }}
-                  className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                  placeholder="Search for hotels or enter address..."
-                  required
-                />
-                {selectedAddress && (
-                  <div className="mt-2 p-2 bg-stone-50 rounded-lg border border-stone-200">
-                    <div className="text-xs text-stone-500 mb-0.5">Address:</div>
-                    <div className="text-sm text-stone-700">{selectedAddress}</div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <input
-                type="text"
-                value={formData.origin_name}
-                onChange={(e) => updateField('origin_name', e.target.value)}
-                className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                placeholder={formData.type === 'flight' ? 'SFO' : 'Enter location...'}
-                required
-              />
+            <input
+              ref={originInputRef}
+              type="text"
+              value={formData.origin_name}
+              onChange={(e) => {
+                updateField('origin_name', e.target.value);
+                // Clear coordinates when manually typing
+                updateField('origin_lat', null);
+                updateField('origin_lng', null);
+                updateField('origin_address', '');
+              }}
+              className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+              placeholder={
+                formData.type === 'flight' ? 'Search airports...' :
+                formData.type === 'hotel' ? 'Search hotels...' :
+                'Search location...'
+              }
+              required
+            />
+            {formData.origin_address && formData.origin_address !== formData.origin_name && (
+              <div className="mt-1.5 px-3 py-2 bg-stone-50 rounded-lg border border-stone-200">
+                <div className="text-xs text-stone-500 mb-0.5">Address</div>
+                <div className="text-sm text-stone-700">{formData.origin_address}</div>
+              </div>
             )}
           </div>
 
@@ -191,25 +257,42 @@ export default function AddEditStepModal({
           {showDestination && (
             <div>
               <label className="block text-sm font-medium text-stone-700 mb-1">
-                Destination
+                {formData.type === 'flight' ? 'Arrival Airport' : 'Destination'}
               </label>
               <input
+                ref={destInputRef}
                 type="text"
                 value={formData.destination_name}
-                onChange={(e) => updateField('destination_name', e.target.value)}
+                onChange={(e) => {
+                  updateField('destination_name', e.target.value);
+                  updateField('destination_lat', null);
+                  updateField('destination_lng', null);
+                  updateField('destination_address', '');
+                }}
                 className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                placeholder={formData.type === 'flight' ? 'JFK' : 'Enter destination...'}
+                placeholder={
+                  formData.type === 'flight' ? 'Search airports...' :
+                  'Search destination...'
+                }
               />
+              {formData.destination_address && formData.destination_address !== formData.destination_name && (
+                <div className="mt-1.5 px-3 py-2 bg-stone-50 rounded-lg border border-stone-200">
+                  <div className="text-xs text-stone-500 mb-0.5">Address</div>
+                  <div className="text-sm text-stone-700">{formData.destination_address}</div>
+                </div>
+              )}
             </div>
           )}
 
           {/* Carrier / Provider */}
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-1">
-              {formData.type === 'hotel' ? 'Hotel Chain' :
+              {formData.type === 'flight' ? 'Airline & Flight Number' :
+               formData.type === 'hotel' ? 'Hotel Chain' :
                formData.type === 'car' ? 'Rental Company' :
-               formData.type === 'restaurant' ? 'Cuisine Type' :
-               'Carrier / Provider'}
+               formData.type === 'train' ? 'Train Service' :
+               formData.type === 'bus' ? 'Bus Company' :
+               'Provider'}
             </label>
             <input
               type="text"
@@ -217,9 +300,10 @@ export default function AddEditStepModal({
               onChange={(e) => updateField('carrier_name', e.target.value)}
               className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
               placeholder={
-                formData.type === 'flight' ? 'United Airlines UA 1234' :
+                formData.type === 'flight' ? 'United • UA 1234' :
                 formData.type === 'hotel' ? 'Marriott' :
                 formData.type === 'car' ? 'Enterprise' :
+                formData.type === 'train' ? 'Amtrak' :
                 ''
               }
             />
@@ -260,4 +344,3 @@ export default function AddEditStepModal({
     </div>
   );
 }
-

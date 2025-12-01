@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
 import { 
   getSupabase, 
@@ -13,7 +13,7 @@ import {
   deleteTravelStep,
   moveTravelStepToTrip 
 } from '../lib/travelSteps';
-import { fetchTrips, createTrip, suggestTripGroupings } from '../lib/trips';
+import { fetchTrips, createTrip } from '../lib/trips';
 
 import Header from '../components/Header';
 import AuthModal from '../components/AuthModal';
@@ -36,11 +36,35 @@ export default function App() {
   const [editingStep, setEditingStep] = useState(null);
   const [googleMapsLoaded, setGoogleMapsLoaded] = useState(false);
 
-  // Check for Google Maps
+  // Check for Google Maps on mount and after a delay
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.google?.maps?.places) {
-      setGoogleMapsLoaded(true);
+    function checkGoogleMaps() {
+      if (typeof window !== 'undefined' && window.google?.maps?.places) {
+        setGoogleMapsLoaded(true);
+        return true;
+      }
+      return false;
     }
+
+    // Check immediately
+    if (checkGoogleMaps()) return;
+
+    // Check again after script might have loaded
+    const interval = setInterval(() => {
+      if (checkGoogleMaps()) {
+        clearInterval(interval);
+      }
+    }, 500);
+
+    // Stop checking after 10 seconds
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+    }, 10000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
   }, []);
 
   // Auth listener
@@ -83,7 +107,7 @@ export default function App() {
     try {
       const [stepsData, tripsData] = await Promise.all([
         fetchTravelSteps(),
-        fetchTrips().catch(() => []) // Trips table might not exist yet
+        fetchTrips().catch(() => [])
       ]);
       
       setTravelSteps(stepsData);
@@ -109,15 +133,7 @@ export default function App() {
     try {
       if (stepData.id) {
         // Update existing
-        const updated = await updateTravelStep(stepData.id, {
-          type: stepData.type,
-          start_datetime: stepData.start_datetime,
-          end_datetime: stepData.end_datetime,
-          origin_name: stepData.origin_name,
-          destination_name: stepData.destination_name,
-          carrier_name: stepData.carrier_name,
-          confirmation_number: stepData.confirmation_number
-        });
+        const updated = await updateTravelStep(stepData.id, stepData);
         
         setTravelSteps(prev => 
           prev.map(s => s.id === updated.id ? updated : s)
@@ -125,15 +141,7 @@ export default function App() {
         );
       } else {
         // Create new
-        const created = await createTravelStep(user.id, {
-          type: stepData.type,
-          start_datetime: stepData.start_datetime,
-          end_datetime: stepData.end_datetime,
-          origin_name: stepData.origin_name,
-          destination_name: stepData.destination_name,
-          carrier_name: stepData.carrier_name,
-          confirmation_number: stepData.confirmation_number
-        });
+        const created = await createTravelStep(user.id, stepData);
         
         setTravelSteps(prev => 
           [...prev, created].sort((a, b) => 
@@ -165,8 +173,7 @@ export default function App() {
 
   async function handleMoveToTrip(stepId, tripId) {
     if (tripId === null) {
-      // Create new trip - show trip creation flow
-      // For now, just create with auto-generated name
+      // Create new trip
       const step = travelSteps.find(s => s.id === stepId);
       if (!step) return;
 

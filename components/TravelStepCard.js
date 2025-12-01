@@ -10,16 +10,17 @@ import {
   TrashIcon,
   MoreIcon
 } from './Icons';
+import { getLocationUrl } from '../lib/distance';
 
 export const TRAVEL_TYPES = {
-  flight: { icon: FlightIcon, label: 'Flight', color: 'text-blue-600' },
-  hotel: { icon: HotelIcon, label: 'Stay', color: 'text-amber-600' },
-  car: { icon: CarIcon, label: 'Rental Car', color: 'text-emerald-600' },
-  train: { icon: TrainIcon, label: 'Train', color: 'text-purple-600' },
-  bus: { icon: BusIcon, label: 'Bus', color: 'text-orange-600' },
-  ferry: { icon: FerryIcon, label: 'Ferry', color: 'text-cyan-600' },
-  restaurant: { icon: RestaurantIcon, label: 'Dinner', color: 'text-rose-600' },
-  activity: { icon: ActivityIcon, label: 'Activity', color: 'text-indigo-600' }
+  flight: { icon: FlightIcon, label: 'Flight' },
+  hotel: { icon: HotelIcon, label: 'Stay' },
+  car: { icon: CarIcon, label: 'Rental Car' },
+  train: { icon: TrainIcon, label: 'Train' },
+  bus: { icon: BusIcon, label: 'Bus' },
+  ferry: { icon: FerryIcon, label: 'Ferry' },
+  restaurant: { icon: RestaurantIcon, label: 'Dinner' },
+  activity: { icon: ActivityIcon, label: 'Activity' }
 };
 
 // Additional icons for new types
@@ -47,6 +48,42 @@ function ActivityIcon() {
   );
 }
 
+function CircleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="6"/>
+    </svg>
+  );
+}
+
+// Clickable location link component
+function LocationLink({ name, code, lat, lng, className = '' }) {
+  const url = getLocationUrl(lat, lng, name);
+  
+  const content = (
+    <span className={`inline-flex items-center gap-1.5 ${className}`}>
+      <span className="font-semibold text-stone-900">{name}</span>
+      {code && <span className="text-xs text-stone-500 font-mono uppercase">{code}</span>}
+      <ChevronIcon />
+    </span>
+  );
+  
+  if (url) {
+    return (
+      <a 
+        href={url} 
+        target="_blank" 
+        rel="noopener noreferrer"
+        className="hover:text-stone-600 transition-colors"
+      >
+        {content}
+      </a>
+    );
+  }
+  
+  return content;
+}
+
 export default function TravelStepCard({ 
   step, 
   onEdit, 
@@ -59,142 +96,256 @@ export default function TravelStepCard({
   const typeConfig = TRAVEL_TYPES[step.type] || TRAVEL_TYPES.activity;
   const TypeIcon = typeConfig.icon;
 
-  function formatTime(datetime) {
-    if (!datetime) return '';
-    const date = new Date(datetime);
-    return date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true 
-    });
+  // Render flight card with connected departure/arrival
+  if (step.type === 'flight') {
+    return (
+      <FlightCard 
+        step={step}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onMoveToTrip={onMoveToTrip}
+        trips={trips}
+        isSharedView={isSharedView}
+        showMenu={showMenu}
+        setShowMenu={setShowMenu}
+      />
+    );
   }
 
+  // Render stay card (hotel)
+  if (step.type === 'hotel') {
+    return (
+      <StayCard 
+        step={step}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onMoveToTrip={onMoveToTrip}
+        trips={trips}
+        isSharedView={isSharedView}
+        showMenu={showMenu}
+        setShowMenu={setShowMenu}
+      />
+    );
+  }
+
+  // Default card for other types
+  return (
+    <DefaultCard 
+      step={step}
+      typeConfig={typeConfig}
+      TypeIcon={TypeIcon}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onMoveToTrip={onMoveToTrip}
+      trips={trips}
+      isSharedView={isSharedView}
+      showMenu={showMenu}
+      setShowMenu={setShowMenu}
+    />
+  );
+}
+
+// Flight card with connected departure/arrival design
+function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const startTime = formatTime(step.start_datetime);
   const endTime = step.end_datetime ? formatTime(step.end_datetime) : null;
+  
+  // Parse origin/destination for airport codes
+  const { name: originName, code: originCode } = parseLocationWithCode(step.origin_name);
+  const { name: destName, code: destCode } = parseLocationWithCode(step.destination_name);
 
   return (
-    <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative hover:border-stone-300 transition">
-      {/* Action menu - only show for owners */}
-      {!isSharedView && (
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="relative">
-            <button
-              onClick={() => setShowMenu(!showMenu)}
-              className="p-2 bg-white rounded-lg border border-stone-300 hover:bg-stone-100 transition"
-              title="More options"
-            >
-              <MoreIcon />
-            </button>
-            
-            {showMenu && (
-              <>
-                <div 
-                  className="fixed inset-0 z-10" 
-                  onClick={() => setShowMenu(false)} 
-                />
-                <div className="absolute right-0 top-full mt-1 bg-white rounded-lg border border-stone-200 shadow-lg py-1 z-20 min-w-[160px]">
-                  <button
-                    onClick={() => {
-                      setShowMenu(false);
-                      onEdit?.(step);
-                    }}
-                    className="w-full px-4 py-2 text-left text-sm text-stone-700 hover:bg-stone-100 flex items-center gap-2"
-                  >
-                    <EditIcon />
-                    Edit
-                  </button>
-                  
-                  {trips.length > 0 && (
-                    <div className="border-t border-stone-100 my-1">
-                      <div className="px-4 py-1 text-xs text-stone-400 uppercase tracking-wide">
-                        Move to trip
-                      </div>
-                      {trips.map(trip => (
-                        <button
-                          key={trip.id}
-                          onClick={() => {
-                            setShowMenu(false);
-                            onMoveToTrip?.(step.id, trip.id);
-                          }}
-                          className="w-full px-4 py-2 text-left text-sm text-stone-700 hover:bg-stone-100"
-                        >
-                          {trip.name}
-                        </button>
-                      ))}
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          onMoveToTrip?.(step.id, null); // Create new trip
-                        }}
-                        className="w-full px-4 py-2 text-left text-sm text-blue-600 hover:bg-blue-50"
-                      >
-                        + New trip
-                      </button>
-                    </div>
+    <div className="bg-stone-50 rounded-xl border border-stone-200 group relative hover:border-stone-300 transition overflow-hidden">
+      <ActionMenu 
+        step={step}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onMoveToTrip={onMoveToTrip}
+        trips={trips}
+        isSharedView={isSharedView}
+        showMenu={showMenu}
+        setShowMenu={setShowMenu}
+      />
+
+      {/* Departure */}
+      <div className="p-4">
+        <div className="flex items-start gap-4">
+          <div className="flex-shrink-0 w-16 text-right">
+            <div className="text-sm font-semibold text-stone-900">{startTime}</div>
+          </div>
+          <div className="flex-shrink-0 text-stone-700">
+            <FlightIcon />
+          </div>
+          <div className="flex-1 min-w-0">
+            <LocationLink 
+              name={originName} 
+              code={originCode}
+              lat={step.origin_lat}
+              lng={step.origin_lng}
+            />
+            <div className="text-sm text-stone-600 space-y-0.5 mt-1">
+              {step.carrier_name && (
+                <div>Flight <span className="font-medium">{step.carrier_name}</span></div>
+              )}
+              <div className="flex gap-4">
+                {step.origin_terminal && (
+                  <span>Terminal <span className="font-medium">{step.origin_terminal}</span></span>
+                )}
+                {step.origin_gate && (
+                  <span>Gate <span className="font-medium">{step.origin_gate}</span></span>
+                )}
+              </div>
+              {step.duration && (
+                <div>Duration <span className="font-medium">{step.duration}</span></div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Arrival */}
+      {step.destination_name && (
+        <div className="p-4 pt-0 border-t border-stone-200 mt-0">
+          <div className="flex items-start gap-4 pt-4">
+            <div className="flex-shrink-0 w-16 text-right">
+              <div className="text-sm font-semibold text-stone-900">{endTime || '–'}</div>
+            </div>
+            <div className="flex-shrink-0 text-stone-500">
+              <CircleIcon />
+            </div>
+            <div className="flex-1 min-w-0 ml-1">
+              <LocationLink 
+                name={destName} 
+                code={destCode}
+                lat={step.destination_lat}
+                lng={step.destination_lng}
+              />
+              <div className="text-sm text-stone-600 mt-0.5">
+                <div className="flex gap-4">
+                  {step.destination_terminal && (
+                    <span>Terminal <span className="font-medium">{step.destination_terminal}</span></span>
                   )}
-                  
-                  <div className="border-t border-stone-100 my-1" />
-                  <button
-                    onClick={() => {
-                      setShowMenu(false);
-                      onDelete?.(step.id);
-                    }}
-                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                  >
-                    <TrashIcon />
-                    Delete
-                  </button>
+                  {step.destination_gate && (
+                    <span>Gate <span className="font-medium">{step.destination_gate || '–'}</span></span>
+                  )}
                 </div>
-              </>
-            )}
+              </div>
+            </div>
           </div>
         </div>
       )}
 
+      {/* Confirmation (owner only) */}
+      {!isSharedView && step.confirmation_number && (
+        <div className="px-4 pb-3 pt-0">
+          <div className="text-xs text-stone-400 font-mono ml-20">
+            Conf: {step.confirmation_number}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Stay card (hotel) design
+function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
+  const nights = calculateNights(step.start_datetime, step.end_datetime);
+
+  return (
+    <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative hover:border-stone-300 transition">
+      <ActionMenu 
+        step={step}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onMoveToTrip={onMoveToTrip}
+        trips={trips}
+        isSharedView={isSharedView}
+        showMenu={showMenu}
+        setShowMenu={setShowMenu}
+      />
+
       <div className="flex items-start gap-4">
-        <div className="flex-shrink-0 w-14 text-right">
-          <div className="text-sm font-semibold text-stone-900">{startTime}</div>
-          {endTime && step.type === 'flight' && (
-            <div className="text-xs text-stone-500 mt-0.5">→ {endTime}</div>
+        <div className="flex-shrink-0 w-16"></div>
+        <div className="flex-shrink-0 text-stone-700">
+          <HotelIcon />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {nights && (
+              <span className="text-sm text-stone-600">{nights} night{nights !== 1 ? 's' : ''}</span>
+            )}
+            <LocationLink 
+              name={step.origin_name} 
+              lat={step.origin_lat}
+              lng={step.origin_lng}
+            />
+          </div>
+          {step.origin_address && (
+            <div className="text-sm text-stone-500 mt-0.5">{step.origin_address}</div>
+          )}
+          {!isSharedView && step.confirmation_number && (
+            <div className="text-xs text-stone-400 font-mono mt-1">
+              Conf: {step.confirmation_number}
+            </div>
           )}
         </div>
-        
-        <div className={`flex-shrink-0 ${typeConfig.color}`}>
+      </div>
+    </div>
+  );
+}
+
+// Default card for other travel types
+function DefaultCard({ step, typeConfig, TypeIcon, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
+  const startTime = formatTime(step.start_datetime);
+
+  return (
+    <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative hover:border-stone-300 transition">
+      <ActionMenu 
+        step={step}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onMoveToTrip={onMoveToTrip}
+        trips={trips}
+        isSharedView={isSharedView}
+        showMenu={showMenu}
+        setShowMenu={setShowMenu}
+      />
+
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-16 text-right">
+          <div className="text-sm font-semibold text-stone-900">{startTime}</div>
+        </div>
+        <div className="flex-shrink-0 text-stone-700">
           <TypeIcon />
         </div>
-        
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span className="font-semibold text-stone-900 truncate">
-              {step.origin_name || typeConfig.label}
-            </span>
+            <LocationLink 
+              name={step.origin_name || typeConfig.label} 
+              lat={step.origin_lat}
+              lng={step.origin_lng}
+            />
             {step.destination_name && (
               <>
-                <ChevronIcon />
-                <span className="font-semibold text-stone-900 truncate">
-                  {step.destination_name}
-                </span>
+                <span className="text-stone-400">→</span>
+                <LocationLink 
+                  name={step.destination_name} 
+                  lat={step.destination_lat}
+                  lng={step.destination_lng}
+                />
               </>
             )}
           </div>
-          
           <div className="text-sm text-stone-600 space-y-0.5">
             {step.carrier_name && (
-              <div>
-                {typeConfig.label} <span className="font-medium">{step.carrier_name}</span>
-              </div>
+              <div>{typeConfig.label} <span className="font-medium">{step.carrier_name}</span></div>
             )}
-            
-            {/* Only show confirmation to owner */}
+            {step.origin_address && (
+              <div className="text-stone-500">{step.origin_address}</div>
+            )}
             {!isSharedView && step.confirmation_number && (
-              <div className="text-xs text-stone-500 mt-1 font-mono">
+              <div className="text-xs text-stone-400 font-mono mt-1">
                 Conf: {step.confirmation_number}
-              </div>
-            )}
-            
-            {endTime && step.type === 'hotel' && (
-              <div className="text-xs text-stone-500 mt-1">
-                Check-out: {formatTime(step.end_datetime)} on {formatDate(step.end_datetime)}
               </div>
             )}
           </div>
@@ -204,10 +355,122 @@ export default function TravelStepCard({
   );
 }
 
-function formatDate(datetime) {
-  if (!datetime) return '';
-  const date = new Date(datetime);
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${months[date.getMonth()]} ${date.getDate()}`;
+// Action menu component
+function ActionMenu({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
+  if (isSharedView) return null;
+
+  return (
+    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+      <div className="relative">
+        <button
+          onClick={() => setShowMenu(!showMenu)}
+          className="p-2 bg-white rounded-lg border border-stone-300 hover:bg-stone-100 transition shadow-sm"
+          title="More options"
+        >
+          <MoreIcon />
+        </button>
+        
+        {showMenu && (
+          <>
+            <div 
+              className="fixed inset-0 z-10" 
+              onClick={() => setShowMenu(false)} 
+            />
+            <div className="absolute right-0 top-full mt-1 bg-white rounded-lg border border-stone-200 shadow-lg py-1 z-20 min-w-[160px]">
+              <button
+                onClick={() => {
+                  setShowMenu(false);
+                  onEdit?.(step);
+                }}
+                className="w-full px-4 py-2 text-left text-sm text-stone-700 hover:bg-stone-100 flex items-center gap-2"
+              >
+                <EditIcon />
+                Edit
+              </button>
+              
+              {trips && trips.length > 0 && (
+                <div className="border-t border-stone-100 my-1">
+                  <div className="px-4 py-1 text-xs text-stone-400 uppercase tracking-wide">
+                    Move to trip
+                  </div>
+                  {trips.map(trip => (
+                    <button
+                      key={trip.id}
+                      onClick={() => {
+                        setShowMenu(false);
+                        onMoveToTrip?.(step.id, trip.id);
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm text-stone-700 hover:bg-stone-100"
+                    >
+                      {trip.name}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      onMoveToTrip?.(step.id, null);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-blue-600 hover:bg-blue-50"
+                  >
+                    + New trip
+                  </button>
+                </div>
+              )}
+              
+              <div className="border-t border-stone-100 my-1" />
+              <button
+                onClick={() => {
+                  setShowMenu(false);
+                  onDelete?.(step.id);
+                }}
+                className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+              >
+                <TrashIcon />
+                Delete
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
+// Helper functions
+function formatTime(datetime) {
+  if (!datetime) return '';
+  const date = new Date(datetime);
+  return date.toLocaleTimeString('en-US', { 
+    hour: 'numeric', 
+    minute: '2-digit', 
+    hour12: true 
+  }).replace(' ', '').toUpperCase();
+}
+
+function parseLocationWithCode(locationStr) {
+  if (!locationStr) return { name: '', code: '' };
+  
+  // Try to extract airport code like "San Francisco (SFO)" or "Newark EWR"
+  const parenMatch = locationStr.match(/^(.+?)\s*\(([A-Z]{3})\)$/);
+  if (parenMatch) {
+    return { name: parenMatch[1].trim(), code: parenMatch[2] };
+  }
+  
+  const spaceMatch = locationStr.match(/^(.+?)\s+([A-Z]{3})$/);
+  if (spaceMatch) {
+    return { name: spaceMatch[1].trim(), code: spaceMatch[2] };
+  }
+  
+  return { name: locationStr, code: '' };
+}
+
+function calculateNights(startDatetime, endDatetime) {
+  if (!startDatetime || !endDatetime) return null;
+  
+  const start = new Date(startDatetime);
+  const end = new Date(endDatetime);
+  const diffTime = end - start;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  return diffDays > 0 ? diffDays : null;
+}
