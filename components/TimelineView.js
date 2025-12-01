@@ -140,13 +140,13 @@ function groupStepsByDate(steps) {
   const groups = new Map();
   
   steps.forEach(step => {
-    const date = new Date(step.start_datetime);
-    const dateKey = date.toISOString().split('T')[0];
+    // Extract date directly from ISO string to avoid timezone conversion
+    const dateKey = extractDateFromISO(step.start_datetime);
     
     if (!groups.has(dateKey)) {
       groups.set(dateKey, {
         date: dateKey,
-        dateLabel: formatDateLabel(date),
+        dateLabel: formatDateLabelFromString(dateKey),
         steps: []
       });
     }
@@ -174,19 +174,46 @@ function groupStepsByDate(steps) {
   return Array.from(groups.values());
 }
 
-// Format date as "Wed Nov 19"
-function formatDateLabel(date) {
+// Extract date string (YYYY-MM-DD) from ISO datetime without timezone conversion
+function extractDateFromISO(isoString) {
+  if (!isoString) return '';
+  
+  // Match the date part directly from the ISO string
+  const match = isoString.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) {
+    return match[1];
+  }
+  
+  // Fallback (shouldn't happen with proper ISO strings)
+  return isoString.split('T')[0];
+}
+
+// Format date from YYYY-MM-DD string as "Wed Nov 19"
+function formatDateLabelFromString(dateStr) {
+  if (!dateStr) return '';
+  
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   
+  // Parse the date string parts manually to avoid timezone issues
+  const [year, month, day] = dateStr.split('-').map(Number);
+  
+  // Create date at noon to avoid any DST edge cases
+  const date = new Date(year, month - 1, day, 12, 0, 0);
+  
+  // Get today/tomorrow for comparison (also at noon)
   const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
   
-  if (date.toDateString() === today.toDateString()) {
+  if (dateStr === todayStr) {
     return 'Today';
   }
-  if (date.toDateString() === tomorrow.toDateString()) {
+  if (dateStr === tomorrowStr) {
     return 'Tomorrow';
   }
   

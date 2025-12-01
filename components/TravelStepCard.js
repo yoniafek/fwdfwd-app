@@ -97,20 +97,29 @@ function extractFlightCode(carrierName) {
   return null;
 }
 
-// Generate FlightAware tracking URL
-function getFlightAwareUrl(carrierName, departureDate) {
+// Generate flight tracking URL - uses Flightradar24 which has better direct linking
+function getFlightTrackingUrl(carrierName, departureDate) {
   const flightCode = extractFlightCode(carrierName);
   if (!flightCode) return null;
+  
+  // Flightradar24 format: https://www.flightradar24.com/data/flights/ua2011
+  // This shows all recent flights for that flight number
+  return `https://www.flightradar24.com/data/flights/${flightCode.toLowerCase()}`;
+}
+
+// Alternative: Google Flights for searching
+function getGoogleFlightsUrl(originCode, destCode, departureDate) {
+  if (!originCode || !destCode) return null;
   
   let dateStr = '';
   if (departureDate) {
     const dateMatch = departureDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (dateMatch) {
-      dateStr = `/${dateMatch[1]}/${dateMatch[2]}/${dateMatch[3]}`;
+      dateStr = dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3];
     }
   }
   
-  return `https://www.flightaware.com/live/flight/${flightCode}${dateStr}`;
+  return `https://www.google.com/travel/flights?q=flights%20${originCode}%20to%20${destCode}${dateStr ? `%20${dateStr}` : ''}`;
 }
 
 // Check flight timing status
@@ -173,7 +182,8 @@ function AirportLink({ name, code, className = '' }) {
 
 // Clickable location link for non-flights
 function LocationLink({ name, lat, lng, address, className = '' }) {
-  const url = getLocationUrl(lat, lng, address || name);
+  // Pass both name and address to get better Maps results
+  const url = getLocationUrl(lat, lng, name, address);
   
   const content = (
     <span className={`inline-flex items-center gap-2 ${className}`}>
@@ -198,12 +208,12 @@ function LocationLink({ name, lat, lng, address, className = '' }) {
   return content;
 }
 
-// Flight info row - clickable to FlightAware
+// Flight info row - clickable to Flightradar24
 function FlightInfoRow({ carrierName, departureDate, arrivalDate, isSharedView }) {
-  const flightAwareUrl = getFlightAwareUrl(carrierName, departureDate);
+  const trackingUrl = getFlightTrackingUrl(carrierName, departureDate);
   const { isLanded, isWithin48Hours, isPast } = getFlightTimingStatus(departureDate, arrivalDate);
   
-  // Can link if within 48 hours OR if in the past
+  // Can link if within 48 hours OR if in the past (Flightradar24 shows historical data too)
   const canLink = isWithin48Hours || isPast;
   
   // Show "Landed" for past flights
@@ -230,10 +240,10 @@ function FlightInfoRow({ carrierName, departureDate, arrivalDate, isSharedView }
     </div>
   );
   
-  if (flightAwareUrl) {
+  if (trackingUrl) {
     return (
       <a 
-        href={canLink ? flightAwareUrl : '#'}
+        href={canLink ? trackingUrl : '#'}
         target={canLink ? '_blank' : undefined}
         rel={canLink ? 'noopener noreferrer' : undefined}
         onClick={handleClick}
@@ -397,11 +407,10 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
   );
 }
 
-// Stay card - for hotels and homes
+// Stay card - for hotels and homes (uses same icon for all stays)
 function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const nights = calculateNights(step.start_datetime, step.end_datetime);
   
-  const isHotel = detectIfHotel(step.origin_name, step.origin_address);
   const displayTitle = step.custom_title || step.origin_name || extractStreetAddress(step.origin_address);
   const addressSubtitle = getAddressSubtitle(step.origin_address, step.origin_name);
 
@@ -425,7 +434,7 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
           )}
         </div>
         <div className="flex-shrink-0 text-stone-700">
-          {isHotel ? <HotelIcon /> : <HomeIcon />}
+          <HotelIcon />
         </div>
         <div className="flex-1 min-w-0">
           <LocationLink 
