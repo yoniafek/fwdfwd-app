@@ -1,23 +1,278 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import Link from 'next/link';
 import { FlightIcon, HotelIcon, CarIcon, ChevronIcon, CircleIcon } from '../components/Icons';
+import { getSupabase, getCurrentUser, onAuthStateChange } from '../lib/supabase';
+import { fetchTravelSteps } from '../lib/travelSteps';
+import { fetchTrips } from '../lib/trips';
+import TimelineView from '../components/TimelineView';
+import Header from '../components/Header';
+import AuthModal from '../components/AuthModal';
+import AddEditStepModal from '../components/AddEditStepModal';
+import { createTravelStep, updateTravelStep, deleteTravelStep, moveTravelStepToTrip } from '../lib/travelSteps';
+import { createTrip } from '../lib/trips';
+import { signOut as supabaseSignOut } from '../lib/supabase';
 
-export default function LandingPage() {
+function PlusIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19"></line>
+      <line x1="5" y1="12" x2="19" y2="12"></line>
+    </svg>
+  );
+}
+
+export default function HomePage() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [travelSteps, setTravelSteps] = useState([]);
+  const [trips, setTrips] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingStep, setEditingStep] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('signup');
+  const [googleMapsLoaded, setGoogleMapsLoaded] = useState(false);
 
+  // Check for Google Maps
+  useEffect(() => {
+    function checkGoogleMaps() {
+      if (typeof window !== 'undefined' && window.google?.maps?.places) {
+        setGoogleMapsLoaded(true);
+        return true;
+      }
+      return false;
+    }
+
+    if (checkGoogleMaps()) return;
+
+    const interval = setInterval(() => {
+      if (checkGoogleMaps()) {
+        clearInterval(interval);
+      }
+    }, 500);
+
+    const timeout = setTimeout(() => clearInterval(interval), 10000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, []);
+
+  // Handle auth state and magic link callback
+  useEffect(() => {
+    // First, check if there's a hash in the URL (magic link callback)
+    if (typeof window !== 'undefined' && window.location.hash) {
+      // Supabase will automatically handle the hash and set the session
+      // We just need to wait for it
+    }
+
+    // Check initial auth state
+    checkUser();
+
+    // Listen for auth changes
+    const { data: authListener } = onAuthStateChange((event, session) => {
+      console.log('Auth state changed:', event, session?.user?.email);
+      
+      if (session?.user) {
+        setUser(session.user);
+        loadUserData();
+        // Clear any hash from URL after successful auth
+        if (window.location.hash) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+      } else {
+        setUser(null);
+        setTravelSteps([]);
+        setTrips([]);
+      }
+      setLoading(false);
+    });
+
+    return () => authListener?.subscription?.unsubscribe();
+  }, []);
+
+  async function checkUser() {
+    try {
+      const currentUser = await getCurrentUser();
+      setUser(currentUser);
+      
+      if (currentUser) {
+        await loadUserData();
+      }
+    } catch (error) {
+      console.error('Error checking user:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadUserData() {
+    try {
+      const [stepsData, tripsData] = await Promise.all([
+        fetchTravelSteps(),
+        fetchTrips().catch(() => [])
+      ]);
+      
+      setTravelSteps(stepsData);
+      setTrips(tripsData);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  }
+
+  async function handleSignOut() {
+    try {
+      await supabaseSignOut();
+      setUser(null);
+      setTravelSteps([]);
+      setTrips([]);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  }
+
+  // Step CRUD operations
+  async function handleSaveStep(stepData) {
+    try {
+      if (stepData.id) {
+        const updated = await updateTravelStep(stepData.id, stepData);
+        setTravelSteps(prev => 
+          prev.map(s => s.id === updated.id ? updated : s)
+            .sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime))
+        );
+      } else {
+        const created = await createTravelStep(user.id, stepData);
+        setTravelSteps(prev => 
+          [...prev, created].sort((a, b) => 
+            new Date(a.start_datetime) - new Date(b.start_datetime)
+          )
+        );
+      }
+      closeModal();
+    } catch (error) {
+      console.error('Error saving step:', error);
+      alert('Error saving travel step: ' + (error.message || 'Unknown error'));
+    }
+  }
+
+  async function handleDeleteStep(stepId) {
+    if (!confirm('Are you sure you want to delete this travel step?')) return;
+    try {
+      await deleteTravelStep(stepId);
+      setTravelSteps(prev => prev.filter(s => s.id !== stepId));
+    } catch (error) {
+      console.error('Error deleting step:', error);
+      alert('Error deleting travel step: ' + error.message);
+    }
+  }
+
+  async function handleMoveToTrip(stepId, tripId) {
+    if (tripId === null) {
+      const step = travelSteps.find(s => s.id === stepId);
+      if (!step) return;
+      try {
+        const newTrip = await createTrip(user.id, {
+          name: `Trip - ${new Date(step.start_datetime).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}`,
+          start_date: step.start_datetime.split('T')[0],
+          destination: step.destination_name || step.origin_name
+        });
+        await moveTravelStepToTrip(stepId, newTrip.id);
+        setTrips(prev => [...prev, newTrip]);
+        setTravelSteps(prev => prev.map(s => s.id === stepId ? { ...s, trip_id: newTrip.id } : s));
+      } catch (error) {
+        console.error('Error creating trip:', error);
+      }
+    } else {
+      try {
+        await moveTravelStepToTrip(stepId, tripId);
+        setTravelSteps(prev => prev.map(s => s.id === stepId ? { ...s, trip_id: tripId } : s));
+      } catch (error) {
+        console.error('Error moving step:', error);
+      }
+    }
+  }
+
+  function handleEditStep(step) {
+    setEditingStep(step);
+    setShowAddModal(true);
+  }
+
+  function closeModal() {
+    setShowAddModal(false);
+    setEditingStep(null);
+  }
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-stone-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-stone-300 border-t-stone-900 rounded-full animate-spin mx-auto mb-4" />
+          <div className="text-stone-600">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // LOGGED IN - Show Timeline
+  if (user) {
+    return (
+      <>
+        <div className="min-h-screen bg-stone-100">
+          <Header user={user} onSignOut={handleSignOut} />
+          
+          <main className="max-w-2xl mx-auto px-4 py-6">
+            <TimelineView 
+              steps={travelSteps}
+              trips={trips}
+              onEditStep={handleEditStep}
+              onDeleteStep={handleDeleteStep}
+              onMoveToTrip={handleMoveToTrip}
+            />
+
+            {/* Floating Add Button */}
+            <button
+              onClick={() => { setEditingStep(null); setShowAddModal(true); }}
+              className="fixed bottom-6 right-6 bg-stone-900 text-white p-4 rounded-full shadow-lg hover:bg-stone-800 hover:scale-105 transition-all duration-200 active:scale-95"
+              aria-label="Add travel step"
+            >
+              <PlusIcon />
+            </button>
+          </main>
+
+          {/* Add/Edit Modal */}
+          {showAddModal && (
+            <AddEditStepModal
+              step={editingStep}
+              onSave={handleSaveStep}
+              onClose={closeModal}
+              googleMapsLoaded={googleMapsLoaded}
+            />
+          )}
+        </div>
+      </>
+    );
+  }
+
+  // LOGGED OUT - Show Landing Page
   return (
     <div className="min-h-screen bg-stone-100">
       <header className="bg-white border-b border-stone-200">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-2xl font-bold text-stone-900">FWD</h1>
           <div className="flex gap-3">
-            <Link href="/app" className="px-4 py-2 text-stone-700 hover:text-stone-900 font-medium">
+            <button 
+              onClick={() => setShowAuthModal(true)}
+              className="px-4 py-2 text-stone-700 hover:text-stone-900 font-medium"
+            >
               Log in
-            </Link>
-            <Link href="/app" className="px-6 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 font-medium">
+            </button>
+            <button 
+              onClick={() => setShowAuthModal(true)}
+              className="px-6 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 font-medium"
+            >
               Sign up
-            </Link>
+            </button>
           </div>
         </div>
       </header>
@@ -41,7 +296,7 @@ export default function LandingPage() {
           <div className="mb-8">
             <div className="text-sm text-stone-500 mb-2">SAMPLE TRIP</div>
             <h3 className="text-2xl font-bold text-stone-900 mb-2">
-              Yoni's Trip to Teaneck & Brooklyn
+              Trip to New York
             </h3>
             <div className="text-stone-600">
               13 nights • Nov 19 to Dec 2 '25
@@ -99,30 +354,6 @@ export default function LandingPage() {
                   </div>
                 </div>
               </div>
-
-              <div className="flex items-center justify-center my-3">
-                <div className="text-sm text-stone-500 flex items-center gap-1">
-                  30 min drive
-                  <ChevronIcon />
-                </div>
-              </div>
-
-              <div className="bg-stone-50 rounded-xl p-4 border border-stone-200">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12"></div>
-                  <div className="flex-shrink-0 text-stone-700">
-                    <HotelIcon />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm text-stone-600">1 night</span>
-                      <span className="font-semibold text-stone-900">Home</span>
-                      <ChevronIcon />
-                    </div>
-                    <div className="text-sm text-stone-600">Teaneck, NJ</div>
-                  </div>
-                </div>
-              </div>
             </div>
 
             {/* Nov 20 - Hotel */}
@@ -130,43 +361,18 @@ export default function LandingPage() {
               <div className="text-sm font-semibold text-stone-700 mb-3">Thu Nov 20</div>
               <div className="bg-stone-50 rounded-xl p-4 border border-stone-200">
                 <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12"></div>
+                  <div className="flex-shrink-0 w-12 text-right">
+                    <span className="text-sm text-stone-600">7 nights</span>
+                  </div>
                   <div className="flex-shrink-0 text-stone-700">
                     <HotelIcon />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm text-stone-600">7 nights</span>
-                      <span className="font-semibold text-stone-900">Aloft New York Broo...</span>
+                      <span className="font-semibold text-stone-900">Aloft New York Brooklyn</span>
                       <ChevronIcon />
                     </div>
-                    <div className="text-sm text-stone-600">Brooklyn, NY</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Nov 27 - Rental Car */}
-            <div>
-              <div className="text-sm font-semibold text-stone-700 mb-3">Thu Nov 27</div>
-              <div className="bg-stone-50 rounded-xl p-4 border border-stone-200">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 text-right">
-                    <div className="text-sm font-medium text-stone-900">10:00am</div>
-                  </div>
-                  <div className="flex-shrink-0 text-stone-700">
-                    <CarIcon />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-stone-900">Enterprise Rent-A-Car</span>
-                      <ChevronIcon />
-                    </div>
-                    <div className="text-sm text-stone-600 space-y-0.5">
-                      <div>Pickup: <span className="font-medium">Brooklyn, NY</span></div>
-                      <div>Vehicle: <span className="font-medium">Compact SUV or similar</span></div>
-                      <div>Confirmation: <span className="font-medium">ABC123XYZ</span></div>
-                    </div>
+                    <div className="text-sm text-stone-500">Brooklyn, NY</div>
                   </div>
                 </div>
               </div>
@@ -191,10 +397,6 @@ export default function LandingPage() {
                     </div>
                     <div className="text-sm text-stone-600 space-y-0.5">
                       <div>Flight <span className="font-medium">Alaska • AS 293</span></div>
-                      <div className="flex gap-4">
-                        <span>Terminal <span className="font-medium">A</span></span>
-                        <span>Gate <span className="font-medium">–</span></span>
-                      </div>
                       <div>Duration <span className="font-medium">6hr32 (-3hr)</span></div>
                     </div>
                   </div>
@@ -213,12 +415,6 @@ export default function LandingPage() {
                       <span className="text-xs text-stone-500 font-mono">SFO</span>
                       <ChevronIcon />
                     </div>
-                    <div className="text-sm text-stone-600 mt-0.5">
-                      <div className="flex gap-4">
-                        <span>Terminal <span className="font-medium">3</span></span>
-                        <span>Gate <span className="font-medium">–</span></span>
-                      </div>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -227,12 +423,23 @@ export default function LandingPage() {
         </div>
 
         <div className="text-center">
-          <Link href="/app" className="inline-block px-8 py-4 bg-stone-900 text-white rounded-lg hover:bg-stone-800 font-semibold text-lg">
+          <button 
+            onClick={() => setShowAuthModal(true)}
+            className="inline-block px-8 py-4 bg-stone-900 text-white rounded-lg hover:bg-stone-800 font-semibold text-lg"
+          >
             Start organizing your trips
-          </Link>
+          </button>
           <p className="text-sm text-stone-500 mt-3">Free to use • No credit card required</p>
         </div>
       </div>
+
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onSuccess={() => setShowAuthModal(false)}
+        />
+      )}
     </div>
   );
 }
