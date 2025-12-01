@@ -4,12 +4,11 @@ import { FlightIcon, ChevronIcon } from './Icons';
 import { calculateDistance, formatDistance, getDirectionsUrl } from '../lib/distance';
 
 export default function TimelineView({ 
-  steps = [], 
+  steps = [],
   trips = [],
-  onEditStep, 
+  onEditStep,
   onDeleteStep,
   onMoveToTrip,
-  onRefreshFlightStatus,
   isSharedView = false,
   emptyMessage = null
 }) {
@@ -69,7 +68,6 @@ export default function TimelineView({
                     onEdit={onEditStep}
                     onDelete={onDeleteStep}
                     onMoveToTrip={onMoveToTrip}
-                    onRefreshFlightStatus={onRefreshFlightStatus}
                     isSharedView={isSharedView}
                   />
                   

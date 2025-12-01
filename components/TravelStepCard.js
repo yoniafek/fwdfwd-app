@@ -64,16 +64,6 @@ function HomeIcon() {
   );
 }
 
-function RefreshIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M23 4v6h-6"/>
-      <path d="M1 20v-6h6"/>
-      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-    </svg>
-  );
-}
-
 function SmallChevronIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -208,30 +198,21 @@ function LocationLink({ name, lat, lng, address, className = '' }) {
   return content;
 }
 
-// Flight info row - clickable to FlightAware only if within 48hr or past
-function FlightInfoRow({ carrierName, departureDate, arrivalDate, flightStatus, onRefreshStatus, isSharedView }) {
+// Flight info row - clickable to FlightAware
+function FlightInfoRow({ carrierName, departureDate, arrivalDate, isSharedView }) {
   const flightAwareUrl = getFlightAwareUrl(carrierName, departureDate);
-  const { canShowStatus, isLanded, isWithin48Hours, isPast } = getFlightTimingStatus(departureDate, arrivalDate);
+  const { isLanded, isWithin48Hours, isPast } = getFlightTimingStatus(departureDate, arrivalDate);
   
   // Can link if within 48 hours OR if in the past
   const canLink = isWithin48Hours || isPast;
   
-  // Determine display status
-  let displayStatus = null;
-  if (canShowStatus) {
-    if (isLanded) {
-      displayStatus = { label: 'Landed', color: 'text-stone-600' };
-    } else if (flightStatus === 'on_time') {
-      displayStatus = { label: 'On time', color: 'text-green-600' };
-    } else if (flightStatus === 'delayed') {
-      displayStatus = { label: 'Delayed', color: 'text-red-600' };
-    }
-  }
+  // Show "Landed" for past flights
+  const showLanded = isLanded;
   
   function handleClick(e) {
     if (!canLink) {
       e.preventDefault();
-      alert('Flight status is not yet available. Check back when it\'s less than 2 days away.');
+      alert('Flight tracking is not yet available. Check back when it\'s less than 2 days away.');
     }
   }
 
@@ -241,23 +222,8 @@ function FlightInfoRow({ carrierName, departureDate, arrivalDate, flightStatus, 
         Flight <span className="font-medium">{carrierName}</span>
       </span>
       <span className="flex items-center gap-1.5">
-        {displayStatus && (
-          <span className={`font-medium ${displayStatus.color}`}>
-            {displayStatus.label}
-          </span>
-        )}
-        {isWithin48Hours && !isLanded && onRefreshStatus && (
-          <button 
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onRefreshStatus();
-            }}
-            className="p-1 text-stone-400 hover:text-stone-600 transition-colors"
-            title="Refresh status"
-          >
-            <RefreshIcon />
-          </button>
+        {showLanded && (
+          <span className="font-medium text-stone-500">Landed</span>
         )}
         <SmallChevronIcon />
       </span>
@@ -286,7 +252,6 @@ export default function TravelStepCard({
   onEdit, 
   onDelete, 
   onMoveToTrip,
-  onRefreshFlightStatus,
   trips = [],
   isSharedView = false 
 }) {
@@ -301,7 +266,6 @@ export default function TravelStepCard({
         onEdit={onEdit}
         onDelete={onDelete}
         onMoveToTrip={onMoveToTrip}
-        onRefreshFlightStatus={onRefreshFlightStatus}
         trips={trips}
         isSharedView={isSharedView}
         showMenu={showMenu}
@@ -342,7 +306,7 @@ export default function TravelStepCard({
 }
 
 // Flight card with connected departure/arrival
-function FlightCard({ step, onEdit, onDelete, onMoveToTrip, onRefreshFlightStatus, trips, isSharedView, showMenu, setShowMenu }) {
+function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const startTime = formatTimeRaw(step.start_datetime);
   const endTime = step.end_datetime ? formatTimeRaw(step.end_datetime) : null;
   
@@ -387,8 +351,6 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, onRefreshFlightStatu
                   carrierName={step.carrier_name}
                   departureDate={step.start_datetime}
                   arrivalDate={step.end_datetime}
-                  flightStatus={step.flight_status}
-                  onRefreshStatus={() => onRefreshFlightStatus?.(step.id)}
                   isSharedView={isSharedView}
                 />
               )}
