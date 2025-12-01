@@ -1,148 +1,151 @@
-import React, { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import { FlightIcon, HotelIcon, CarIcon, TrainIcon, BusIcon, ChevronIcon, PlusIcon, LogoutIcon, TrashIcon, EditIcon } from '../components/Icons';
+import React, { useState, useEffect, useCallback } from 'react';
+import Head from 'next/head';
+import { 
+  getSupabase, 
+  getCurrentUser, 
+  signOut as supabaseSignOut, 
+  onAuthStateChange 
+} from '../lib/supabase';
+import { 
+  fetchTravelSteps, 
+  createTravelStep, 
+  updateTravelStep, 
+  deleteTravelStep,
+  moveTravelStepToTrip 
+} from '../lib/travelSteps';
+import { fetchTrips, createTrip, suggestTripGroupings } from '../lib/trips';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
-
-const TRAVEL_TYPES = {
-  flight: { icon: FlightIcon, label: 'Flight' },
-  hotel: { icon: HotelIcon, label: 'Stay' },
-  car: { icon: CarIcon, label: 'Rental Car' },
-  train: { icon: TrainIcon, label: 'Train' },
-  bus: { icon: BusIcon, label: 'Bus' }
-};
+import Header from '../components/Header';
+import AuthModal from '../components/AuthModal';
+import TimelineView from '../components/TimelineView';
+import AddEditStepModal from '../components/AddEditStepModal';
+import { PlusIcon } from '../components/Icons';
 
 export default function App() {
+  // Auth state
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [travelSteps, setTravelSteps] = useState([]);
-  const [showAddForm, setShowAddForm] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('signin');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [authError, setAuthError] = useState('');
-  
-  const [editingStep, setEditingStep] = useState(null);
-  const [newStep, setNewStep] = useState({
-    type: 'flight',
-    start_datetime: '',
-    end_datetime: '',
-    origin_name: '',
-    destination_name: '',
-    carrier_name: '',
-    confirmation_number: ''
-  });
-  const [selectedAddress, setSelectedAddress] = useState('');
 
+  // Data state
+  const [travelSteps, setTravelSteps] = useState([]);
+  const [trips, setTrips] = useState([]);
+
+  // UI state
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingStep, setEditingStep] = useState(null);
+  const [googleMapsLoaded, setGoogleMapsLoaded] = useState(false);
+
+  // Check for Google Maps
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.google?.maps?.places) {
+      setGoogleMapsLoaded(true);
+    }
+  }, []);
+
+  // Auth listener
   useEffect(() => {
     checkUser();
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+    
+    const { data: authListener } = onAuthStateChange((event, session) => {
       setUser(session?.user || null);
       if (session?.user) {
-        fetchTravelSteps();
+        loadUserData();
         setShowAuthModal(false);
       } else {
         setShowAuthModal(true);
+        setTravelSteps([]);
+        setTrips([]);
       }
     });
+
     return () => authListener?.subscription?.unsubscribe();
   }, []);
 
   async function checkUser() {
-    const { data: { session } } = await supabase.auth.getSession();
-    setUser(session?.user || null);
-    if (session?.user) {
-      await fetchTravelSteps();
-    } else {
-      setShowAuthModal(true);
-    }
-    setLoading(false);
-  }
-
-  async function fetchTravelSteps() {
-    const { data, error } = await supabase
-      .from('travel_steps')
-      .select('*')
-      .order('start_datetime', { ascending: true });
-    if (!error) setTravelSteps(data || []);
-  }
-
-  async function handleAuth() {
-    setAuthError('');
     try {
-      if (authMode === 'signup') {
-        const { error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        alert('Check your email for the confirmation link!');
+      const currentUser = await getCurrentUser();
+      setUser(currentUser);
+      
+      if (currentUser) {
+        await loadUserData();
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        setShowAuthModal(true);
       }
     } catch (error) {
-      setAuthError(error.message);
+      console.error('Error checking user:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadUserData() {
+    try {
+      const [stepsData, tripsData] = await Promise.all([
+        fetchTravelSteps(),
+        fetchTrips().catch(() => []) // Trips table might not exist yet
+      ]);
+      
+      setTravelSteps(stepsData);
+      setTrips(tripsData);
+    } catch (error) {
+      console.error('Error loading data:', error);
     }
   }
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
-    setTravelSteps([]);
-    setShowAuthModal(true);
+    try {
+      await supabaseSignOut();
+      setTravelSteps([]);
+      setTrips([]);
+      setShowAuthModal(true);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
   }
 
-  async function handleAddStep() {
-    if (!newStep.start_datetime || !newStep.origin_name) {
-      alert('Please fill in required fields');
-      return;
-    }
-
-    if (editingStep) {
-      // Update existing step
-      const { data, error } = await supabase
-        .from('travel_steps')
-        .update({
-          type: newStep.type,
-          start_datetime: newStep.start_datetime,
-          end_datetime: newStep.end_datetime,
-          origin_name: newStep.origin_name,
-          destination_name: newStep.destination_name,
-          carrier_name: newStep.carrier_name,
-          confirmation_number: newStep.confirmation_number
-        })
-        .eq('id', editingStep.id)
-        .select();
-
-      if (!error) {
-        setTravelSteps(travelSteps.map(step => 
-          step.id === editingStep.id ? data[0] : step
-        ).sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime)));
-        setShowAddForm(false);
-        setEditingStep(null);
-        setSelectedAddress('');
-        resetForm();
+  // Step CRUD operations
+  async function handleSaveStep(stepData) {
+    try {
+      if (stepData.id) {
+        // Update existing
+        const updated = await updateTravelStep(stepData.id, {
+          type: stepData.type,
+          start_datetime: stepData.start_datetime,
+          end_datetime: stepData.end_datetime,
+          origin_name: stepData.origin_name,
+          destination_name: stepData.destination_name,
+          carrier_name: stepData.carrier_name,
+          confirmation_number: stepData.confirmation_number
+        });
+        
+        setTravelSteps(prev => 
+          prev.map(s => s.id === updated.id ? updated : s)
+            .sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime))
+        );
       } else {
-        alert('Error updating travel step: ' + error.message);
+        // Create new
+        const created = await createTravelStep(user.id, {
+          type: stepData.type,
+          start_datetime: stepData.start_datetime,
+          end_datetime: stepData.end_datetime,
+          origin_name: stepData.origin_name,
+          destination_name: stepData.destination_name,
+          carrier_name: stepData.carrier_name,
+          confirmation_number: stepData.confirmation_number
+        });
+        
+        setTravelSteps(prev => 
+          [...prev, created].sort((a, b) => 
+            new Date(a.start_datetime) - new Date(b.start_datetime)
+          )
+        );
       }
-    } else {
-      // Add new step
-      const { data, error } = await supabase
-        .from('travel_steps')
-        .insert([{ ...newStep, user_id: user.id }])
-        .select();
       
-      if (!error) {
-        setTravelSteps([...travelSteps, ...data].sort((a, b) => 
-          new Date(a.start_datetime) - new Date(b.start_datetime)
-        ));
-        setShowAddForm(false);
-        setSelectedAddress('');
-        resetForm();
-      } else {
-        alert('Error adding travel step: ' + error.message);
-      }
+      closeModal();
+    } catch (error) {
+      console.error('Error saving step:', error);
+      alert('Error saving travel step: ' + error.message);
     }
   }
 
@@ -151,453 +154,138 @@ export default function App() {
       return;
     }
 
-    const { error } = await supabase
-      .from('travel_steps')
-      .delete()
-      .eq('id', stepId);
-
-    if (!error) {
-      setTravelSteps(travelSteps.filter(step => step.id !== stepId));
-    } else {
+    try {
+      await deleteTravelStep(stepId);
+      setTravelSteps(prev => prev.filter(s => s.id !== stepId));
+    } catch (error) {
+      console.error('Error deleting step:', error);
       alert('Error deleting travel step: ' + error.message);
+    }
+  }
+
+  async function handleMoveToTrip(stepId, tripId) {
+    if (tripId === null) {
+      // Create new trip - show trip creation flow
+      // For now, just create with auto-generated name
+      const step = travelSteps.find(s => s.id === stepId);
+      if (!step) return;
+
+      try {
+        const newTrip = await createTrip(user.id, {
+          name: `Trip - ${new Date(step.start_datetime).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}`,
+          start_date: step.start_datetime.split('T')[0],
+          destination: step.destination_name || step.origin_name
+        });
+        
+        await moveTravelStepToTrip(stepId, newTrip.id);
+        
+        setTrips(prev => [...prev, newTrip]);
+        setTravelSteps(prev => 
+          prev.map(s => s.id === stepId ? { ...s, trip_id: newTrip.id } : s)
+        );
+      } catch (error) {
+        console.error('Error creating trip:', error);
+      }
+    } else {
+      try {
+        await moveTravelStepToTrip(stepId, tripId);
+        setTravelSteps(prev => 
+          prev.map(s => s.id === stepId ? { ...s, trip_id: tripId } : s)
+        );
+      } catch (error) {
+        console.error('Error moving step:', error);
+      }
     }
   }
 
   function handleEditStep(step) {
     setEditingStep(step);
-    setNewStep({
-      type: step.type,
-      start_datetime: step.start_datetime,
-      end_datetime: step.end_datetime || '',
-      origin_name: step.origin_name,
-      destination_name: step.destination_name || '',
-      carrier_name: step.carrier_name || '',
-      confirmation_number: step.confirmation_number || ''
-    });
-    setShowAddForm(true);
+    setShowAddModal(true);
   }
 
-  function resetForm() {
-    setNewStep({
-      type: 'flight',
-      start_datetime: '',
-      end_datetime: '',
-      origin_name: '',
-      destination_name: '',
-      carrier_name: '',
-      confirmation_number: ''
-    });
+  function closeModal() {
+    setShowAddModal(false);
+    setEditingStep(null);
   }
 
-  function initAutocomplete(inputRef) {
-    if (!inputRef || !window.google) return;
-    
-    const autocomplete = new window.google.maps.places.Autocomplete(inputRef, {
-      types: ['establishment', 'geocode'],
-      fields: ['name', 'formatted_address', 'address_components', 'place_id']
-    });
-
-    autocomplete.addListener('place_changed', () => {
-      const place = autocomplete.getPlace();
-      if (place && place.formatted_address) {
-        setNewStep({ 
-          ...newStep, 
-          origin_name: place.name || place.formatted_address 
-        });
-        setSelectedAddress(place.formatted_address);
-      }
-    });
+  function openAddModal() {
+    setEditingStep(null);
+    setShowAddModal(true);
   }
 
-  function formatDate(datetime) {
-    if (!datetime) return '';
-    const date = new Date(datetime);
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
-  }
-
-  function formatTime(datetime) {
-    if (!datetime) return '';
-    const date = new Date(datetime);
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-  }
-
-  function TravelStepCard({ step }) {
-    const TypeIcon = TRAVEL_TYPES[step.type].icon;
-    const startTime = formatTime(step.start_datetime);
-    const endTime = step.end_datetime ? formatTime(step.end_datetime) : null;
-
-    return (
-      <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative">
-        {/* Edit/Delete buttons - show on hover */}
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-          <button
-            onClick={() => handleEditStep(step)}
-            className="p-2 bg-white rounded-lg border border-stone-300 hover:bg-stone-100 transition"
-            title="Edit"
-          >
-            <EditIcon />
-          </button>
-          <button
-            onClick={() => handleDeleteStep(step.id)}
-            className="p-2 bg-white rounded-lg border border-stone-300 hover:bg-red-50 hover:border-red-300 transition"
-            title="Delete"
-          >
-            <TrashIcon />
-          </button>
-        </div>
-
-        <div className="flex items-start gap-4">
-          <div className="flex-shrink-0 w-12 text-right">
-            <div className="text-sm font-medium text-stone-900">{startTime}</div>
-            {endTime && step.type === 'flight' && (
-              <div className="text-xs text-stone-500 mt-1">→ {endTime}</div>
-            )}
-          </div>
-          <div className="flex-shrink-0 text-stone-700">
-            <TypeIcon />
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="font-semibold text-stone-900">
-                {step.origin_name || TRAVEL_TYPES[step.type].label}
-              </span>
-              {step.destination_name && (
-                <>
-                  <ChevronIcon />
-                  <span className="font-semibold text-stone-900">{step.destination_name}</span>
-                </>
-              )}
-            </div>
-            <div className="text-sm text-stone-600 space-y-0.5">
-              {step.carrier_name && <div>{TRAVEL_TYPES[step.type].label} <span className="font-medium">{step.carrier_name}</span></div>}
-              {step.confirmation_number && (
-                <div className="text-xs text-stone-500 mt-1">
-                  Confirmation: {step.confirmation_number}
-                </div>
-              )}
-              {endTime && step.type === 'hotel' && (
-                <div className="text-xs text-stone-500 mt-1">
-                  Check-out: {endTime}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-stone-100 flex items-center justify-center">
-        <div className="text-stone-600">Loading...</div>
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-stone-300 border-t-stone-900 rounded-full animate-spin mx-auto mb-4" />
+          <div className="text-stone-600">Loading...</div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-stone-100">
-      <header className="bg-white border-b border-stone-200">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-stone-900">FWD</h1>
-            {user && <p className="text-sm text-stone-600">{user.email}</p>}
-          </div>
-          {user && (
-            <button
-              onClick={handleSignOut}
-              className="flex items-center gap-2 px-4 py-2 text-stone-600 hover:text-stone-900 transition"
-            >
-              <LogoutIcon />
-              <span className="text-sm font-medium">Log out</span>
-            </button>
-          )}
-        </div>
-      </header>
+    <>
+      <Head>
+        <title>FWD - Your Travel Timeline</title>
+        <meta name="description" content="Forward your travel confirmations to build your timeline" />
+      </Head>
 
-      {user ? (
-        <div className="max-w-4xl mx-auto px-4 py-8">
-          {travelSteps.length > 0 ? (
-            <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6 mb-8">
-              <div className="mb-8">
-                <h3 className="text-2xl font-bold text-stone-900 mb-2">Your Timeline</h3>
-                <div className="text-stone-600">
-                  {travelSteps.length} {travelSteps.length === 1 ? 'step' : 'steps'}
-                </div>
-              </div>
-              <div className="space-y-6">
-                {travelSteps.reduce((acc, step, index) => {
-                  const stepDate = formatDate(step.start_datetime);
-                  const prevDate = index > 0 ? formatDate(travelSteps[index - 1].start_datetime) : null;
-                  
-                  if (stepDate !== prevDate) {
-                    acc.push(
-                      <div key={`date-${index}`}>
-                        <div className="text-sm font-semibold text-stone-700 mb-3">{stepDate}</div>
-                      </div>
-                    );
-                  }
-                  
-                  acc.push(
-                    <div key={step.id || index}>
-                      <TravelStepCard step={step} />
-                    </div>
-                  );
-                  
-                  return acc;
-                }, [])}
-              </div>
-            </div>
-          ) : (
-            <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-12 text-center">
-              <div className="text-stone-400 mb-4 flex justify-center">
-                <FlightIcon />
-              </div>
-              <h3 className="text-lg font-medium text-stone-900 mb-2">No travel plans yet</h3>
-              <p className="text-stone-600 mb-6">
-                Forward your travel confirmations to:<br/>
-                <span className="font-mono font-semibold text-stone-900">add@fwdfwd.com</span>
-              </p>
-              <p className="text-sm text-stone-500">or add them manually below</p>
-            </div>
-          )}
+      <div className="min-h-screen bg-stone-100">
+        <Header user={user} onSignOut={handleSignOut} />
 
-          {!showAddForm && (
+        {user ? (
+          <main className="max-w-4xl mx-auto px-4 py-8">
+            {/* Email forwarding reminder */}
+            {travelSteps.length === 0 && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                <p className="text-blue-800 text-sm">
+                  <strong>Tip:</strong> Forward your flight, hotel, and car rental confirmations to{' '}
+                  <span className="font-mono font-semibold">add@fwdfwd.com</span>{' '}
+                  and they'll automatically appear here!
+                </p>
+              </div>
+            )}
+
+            {/* Timeline */}
+            <TimelineView
+              steps={travelSteps}
+              trips={trips}
+              onEditStep={handleEditStep}
+              onDeleteStep={handleDeleteStep}
+              onMoveToTrip={handleMoveToTrip}
+            />
+
+            {/* Floating Add Button */}
             <button
-              onClick={() => {
-                setEditingStep(null);
-                resetForm();
-                setShowAddForm(true);
-              }}
-              className="fixed bottom-6 right-6 bg-stone-900 text-white p-4 rounded-full shadow-lg hover:bg-stone-800 transition"
+              onClick={openAddModal}
+              className="fixed bottom-6 right-6 bg-stone-900 text-white p-4 rounded-full shadow-lg hover:bg-stone-800 hover:scale-105 transition-all duration-200 active:scale-95"
+              aria-label="Add travel step"
             >
               <PlusIcon />
             </button>
-          )}
+          </main>
+        ) : null}
 
-          {showAddForm && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-                <h2 className="text-xl font-bold mb-4 text-stone-900">
-                  {editingStep ? 'Edit Travel Step' : 'Add Travel Step'}
-                </h2>
-                <div className="space-y-4">
-                  {/* Type Selector */}
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-2">Type</label>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(TRAVEL_TYPES).map(([key, { label, icon: Icon }]) => (
-                        <button
-                          key={key}
-                          onClick={() => {
-                            setNewStep({ ...newStep, type: key });
-                            setSelectedAddress('');
-                          }}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition ${
-                            newStep.type === key
-                              ? 'bg-stone-900 text-white'
-                              : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                          }`}
-                        >
-                          <Icon />
-                          <span>{label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+        {/* Auth Modal */}
+        {showAuthModal && (
+          <AuthModal
+            onClose={() => setShowAuthModal(false)}
+            onSuccess={() => setShowAuthModal(false)}
+          />
+        )}
 
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1">
-                      {newStep.type === 'hotel' ? 'Check-in' : 'Departure'} Date & Time *
-                    </label>
-                    <input
-                      type="datetime-local"
-                      value={newStep.start_datetime}
-                      onChange={(e) => setNewStep({ ...newStep, start_datetime: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                    />
-                  </div>
-
-                  {(newStep.type === 'hotel' || newStep.type === 'flight') && (
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">
-                        {newStep.type === 'hotel' ? 'Check-out' : 'Arrival'} Date & Time
-                      </label>
-                      <input
-                        type="datetime-local"
-                        value={newStep.end_datetime}
-                        onChange={(e) => setNewStep({ ...newStep, end_datetime: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                      />
-                    </div>
-                  )}
-
-                  {/* Google Places Autocomplete for Hotel */}
-                  {newStep.type === 'hotel' ? (
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">
-                        Where are you staying? *
-                      </label>
-                      <input
-                        ref={(ref) => {
-                          if (ref && showAddForm) {
-                            initAutocomplete(ref);
-                          }
-                        }}
-                        type="text"
-                        value={newStep.origin_name}
-                        onChange={(e) => {
-                          setNewStep({ ...newStep, origin_name: e.target.value });
-                          setSelectedAddress('');
-                        }}
-                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                        placeholder="Search for hotels or enter address..."
-                      />
-                      {selectedAddress && (
-                        <div className="mt-2 p-2 bg-stone-50 rounded-lg border border-stone-200">
-                          <div className="text-xs text-stone-500 mb-1">Address:</div>
-                          <div className="text-sm text-stone-700">{selectedAddress}</div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Origin *</label>
-                      <input
-                        type="text"
-                        value={newStep.origin_name}
-                        onChange={(e) => setNewStep({ ...newStep, origin_name: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                        placeholder="SFO"
-                      />
-                    </div>
-                  )}
-
-                  {newStep.type !== 'hotel' && (
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Destination</label>
-                      <input
-                        type="text"
-                        value={newStep.destination_name}
-                        onChange={(e) => setNewStep({ ...newStep, destination_name: e.target.value })}
-                        className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                        placeholder="JFK"
-                      />
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1">
-                      {newStep.type === 'hotel' ? 'Hotel' : 'Carrier'} Name
-                    </label>
-                    <input
-                      type="text"
-                      value={newStep.carrier_name}
-                      onChange={(e) => setNewStep({ ...newStep, carrier_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                      placeholder={newStep.type === 'flight' ? 'United Airlines UA 1234' : ''}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-stone-700 mb-1">Confirmation Number</label>
-                    <input
-                      type="text"
-                      value={newStep.confirmation_number}
-                      onChange={(e) => setNewStep({ ...newStep, confirmation_number: e.target.value })}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                    />
-                  </div>
-
-                  <div className="flex gap-2 pt-4">
-                    <button
-                      onClick={() => {
-                        setShowAddForm(false);
-                        setEditingStep(null);
-                        setSelectedAddress('');
-                        resetForm();
-                      }}
-                      className="flex-1 px-4 py-2 border border-stone-300 rounded-lg text-stone-700 hover:bg-stone-50 transition"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleAddStep}
-                      className="flex-1 px-4 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition"
-                    >
-                      {editingStep ? 'Update Step' : 'Add Step'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      {showAuthModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-            <h2 className="text-2xl font-bold text-stone-900 mb-6">
-              {authMode === 'signin' ? 'Log in' : 'Sign up'}
-            </h2>
-
-            <div className="flex gap-2 mb-6">
-              <button
-                onClick={() => setAuthMode('signin')}
-                className={`flex-1 py-2 rounded-lg font-medium transition ${
-                  authMode === 'signin' ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600'
-                }`}
-              >
-                Log in
-              </button>
-              <button
-                onClick={() => setAuthMode('signup')}
-                className={`flex-1 py-2 rounded-lg font-medium transition ${
-                  authMode === 'signup' ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600'
-                }`}
-              >
-                Sign up
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-stone-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-4 py-3 border border-stone-300 rounded-lg"
-                  placeholder="you@example.com"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-stone-700 mb-1">Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 border border-stone-300 rounded-lg"
-                  placeholder="••••••••"
-                />
-              </div>
-              {authError && <div className="text-red-600 text-sm">{authError}</div>}
-              <button onClick={handleAuth} className="w-full bg-stone-900 text-white py-3 rounded-lg font-semibold hover:bg-stone-800">
-                {authMode === 'signin' ? 'Log in' : 'Create account'}
-              </button>
-            </div>
-
-            {authMode === 'signup' && (
-              <p className="text-xs text-stone-500 mt-4 text-center">
-                After signing up, check your email for a confirmation link
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+        {/* Add/Edit Modal */}
+        {showAddModal && (
+          <AddEditStepModal
+            step={editingStep}
+            onSave={handleSaveStep}
+            onClose={closeModal}
+            googleMapsLoaded={googleMapsLoaded}
+          />
+        )}
+      </div>
+    </>
   );
 }
