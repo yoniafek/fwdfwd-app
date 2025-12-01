@@ -86,10 +86,12 @@ Extract this information:
     {
       "start_datetime": "YYYY-MM-DDTHH:MM:SS-08:00",  // LOCAL departure time with offset
       "end_datetime": "YYYY-MM-DDTHH:MM:SS-05:00",    // LOCAL arrival time with offset
-      "origin_name": "City Name (ABC)",               // City name with airport code
+      "origin_name": "City Name (ABC)",               // City name with airport code OR hotel name
+      "origin_address": "123 Main St, City, State ZIP", // Full address if available
       "origin_terminal": "3",                          // Terminal if available, null otherwise
       "origin_gate": "A4",                             // Gate if available, null otherwise
       "destination_name": "City Name (XYZ)",          // City name with airport code
+      "destination_address": null,                     // Full address if available
       "destination_terminal": "A",                     // Terminal if available
       "destination_gate": null,                        // Gate if available
       "carrier_name": "Airline • XX 1234",            // Airline name + flight number
@@ -146,9 +148,11 @@ Hotel:
       "start_datetime": "2025-11-20T15:00:00-05:00",
       "end_datetime": "2025-11-27T11:00:00-05:00",
       "origin_name": "Aloft New York Brooklyn",
+      "origin_address": "216 Duffield St, Brooklyn, NY 11201",
       "origin_terminal": null,
       "origin_gate": null,
       "destination_name": null,
+      "destination_address": null,
       "destination_terminal": null,
       "destination_gate": null,
       "carrier_name": "Marriott",
@@ -283,9 +287,11 @@ If you cannot extract valid booking details with confidence, return:
       start_datetime: segment.start_datetime,
       end_datetime: segment.end_datetime,
       origin_name: segment.origin_name,
+      origin_address: segment.origin_address || null,
       origin_terminal: segment.origin_terminal || null,
       origin_gate: segment.origin_gate || null,
       destination_name: segment.destination_name,
+      destination_address: segment.destination_address || null,
       destination_terminal: segment.destination_terminal || null,
       destination_gate: segment.destination_gate || null,
       carrier_name: segment.carrier_name,
@@ -293,17 +299,71 @@ If you cannot extract valid booking details with confidence, return:
     }));
 
     console.log('Inserting', travelSteps.length, 'travel steps');
+    console.log('Travel steps to insert:', JSON.stringify(travelSteps, null, 2));
 
-    const { error: insertError } = await supabase
+    // Check for duplicates before inserting
+    const duplicateChecks = await Promise.all(
+      travelSteps.map(async (step) => {
+        const { data: existing } = await supabase
+          .from('travel_steps')
+          .select('id')
+          .eq('user_id', step.user_id)
+          .eq('type', step.type)
+          .eq('start_datetime', step.start_datetime)
+          .eq('origin_name', step.origin_name)
+          .limit(1);
+        
+        return { step, isDuplicate: existing && existing.length > 0 };
+      })
+    );
+
+    const newSteps = duplicateChecks
+      .filter(({ isDuplicate }) => !isDuplicate)
+      .map(({ step }) => step);
+
+    const duplicateCount = travelSteps.length - newSteps.length;
+    
+    if (duplicateCount > 0) {
+      console.log(`Skipping ${duplicateCount} duplicate step(s)`);
+    }
+
+    if (newSteps.length === 0) {
+      console.log('All steps are duplicates - nothing to insert');
+      
+      await resend.emails.send({
+        from: 'FWD <add@fwdfwd.com>',
+        to: senderEmail,
+        subject: `Already in Your Timeline`,
+        html: `
+          <p>Hi!</p>
+          
+          <p>We received your email, but this ${parsed.type} is already in your timeline.</p>
+          
+          <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Timeline</a></p>
+          
+          <p>Thanks,<br>The FWD Team</p>
+        `
+      });
+
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Duplicate - already exists',
+        segmentsAdded: 0
+      });
+    }
+
+    const { data: insertedData, error: insertError } = await supabase
       .from('travel_steps')
-      .insert(travelSteps);
+      .insert(newSteps)
+      .select();
 
     if (insertError) {
       console.error('Error inserting travel steps:', insertError);
+      console.error('Insert error details:', JSON.stringify(insertError, null, 2));
       return res.status(500).json({ error: 'Database error', details: insertError.message });
     }
 
-    console.log('Successfully added travel steps');
+    console.log('Successfully added travel steps:', insertedData?.length || newSteps.length);
 
     // Format segments for confirmation email
     const segmentDescriptions = parsed.segments.map(seg => {
@@ -336,7 +396,7 @@ ${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
         <p><strong>Details:</strong></p>
         <p>${segmentDescriptions}</p>
         
-        ${parsed.segments.length > 1 ? `<p><em>Added ${parsed.segments.length} segments to your journey</em></p>` : ''}
+        ${newSteps.length > 1 ? `<p><em>Added ${newSteps.length} segments to your journey</em></p>` : ''}
         
         <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Timeline</a></p>
         
@@ -349,7 +409,8 @@ ${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
     return res.status(200).json({ 
       success: true, 
       message: 'Email processed and confirmation sent',
-      segmentsAdded: parsed.segments.length
+      segmentsAdded: newSteps.length,
+      duplicatesSkipped: duplicateCount
     });
 
   } catch (error) {
