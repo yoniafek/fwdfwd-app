@@ -97,18 +97,9 @@ function getAirportUrl(airportCode, cityName) {
 function extractFlightCode(carrierName) {
   if (!carrierName) return null;
   
-  // Handle formats like:
-  // "United • UA 2011"
-  // "Alaska • AS 293"
-  // "United Airlines UA 1234"
-  // "UA1234"
-  // "UA 1234"
-  
-  // Remove bullet/dot characters and extra spaces
   const cleaned = carrierName.replace(/[•·]/g, ' ').replace(/\s+/g, ' ').trim();
-  
-  // Try to match airline code + flight number
   const match = cleaned.match(/([A-Z]{2})\s*(\d{1,4})/i);
+  
   if (match) {
     return `${match[1].toUpperCase()}${match[2]}`;
   }
@@ -121,10 +112,8 @@ function getFlightAwareUrl(carrierName, departureDate) {
   const flightCode = extractFlightCode(carrierName);
   if (!flightCode) return null;
   
-  // Format date for FlightAware URL
   let dateStr = '';
   if (departureDate) {
-    // Extract date from ISO string
     const dateMatch = departureDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (dateMatch) {
       dateStr = `/${dateMatch[1]}/${dateMatch[2]}/${dateMatch[3]}`;
@@ -136,7 +125,7 @@ function getFlightAwareUrl(carrierName, departureDate) {
 
 // Check flight timing status
 function getFlightTimingStatus(departureDate, arrivalDate) {
-  if (!departureDate) return { canShowStatus: false, isLanded: false, isWithin48Hours: false };
+  if (!departureDate) return { canShowStatus: false, isLanded: false, isWithin48Hours: false, isPast: false };
   
   const now = new Date();
   const departure = new Date(departureDate);
@@ -144,17 +133,23 @@ function getFlightTimingStatus(departureDate, arrivalDate) {
   
   // Check if flight has landed (arrival time has passed)
   if (arrival && arrival < now) {
-    return { canShowStatus: true, isLanded: true, isWithin48Hours: false };
+    return { canShowStatus: true, isLanded: true, isWithin48Hours: false, isPast: true };
+  }
+  
+  // Check if departure has passed but no arrival (in flight or past)
+  if (departure < now) {
+    return { canShowStatus: true, isLanded: false, isWithin48Hours: true, isPast: true };
   }
   
   // Check if within 48 hours of departure
   const hoursToDeparture = (departure - now) / (1000 * 60 * 60);
-  const isWithin48Hours = hoursToDeparture <= 48 && hoursToDeparture > -24;
+  const isWithin48Hours = hoursToDeparture <= 48;
   
   return { 
-    canShowStatus: isWithin48Hours || (arrival && arrival < now), 
+    canShowStatus: isWithin48Hours, 
     isLanded: false, 
-    isWithin48Hours 
+    isWithin48Hours,
+    isPast: false
   };
 }
 
@@ -213,10 +208,13 @@ function LocationLink({ name, lat, lng, address, className = '' }) {
   return content;
 }
 
-// Flight info row - clickable to FlightAware
+// Flight info row - clickable to FlightAware only if within 48hr or past
 function FlightInfoRow({ carrierName, departureDate, arrivalDate, flightStatus, onRefreshStatus, isSharedView }) {
   const flightAwareUrl = getFlightAwareUrl(carrierName, departureDate);
-  const { canShowStatus, isLanded, isWithin48Hours } = getFlightTimingStatus(departureDate, arrivalDate);
+  const { canShowStatus, isLanded, isWithin48Hours, isPast } = getFlightTimingStatus(departureDate, arrivalDate);
+  
+  // Can link if within 48 hours OR if in the past
+  const canLink = isWithin48Hours || isPast;
   
   // Determine display status
   let displayStatus = null;
@@ -230,17 +228,24 @@ function FlightInfoRow({ carrierName, departureDate, arrivalDate, flightStatus, 
     }
   }
   
+  function handleClick(e) {
+    if (!canLink) {
+      e.preventDefault();
+      alert('Flight status is not yet available. Check back when it\'s less than 2 days away.');
+    }
+  }
+
   const content = (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center gap-3">
       <span>
         Flight <span className="font-medium">{carrierName}</span>
+      </span>
+      <span className="flex items-center gap-1.5">
         {displayStatus && (
-          <span className={`ml-2 font-medium ${displayStatus.color}`}>
+          <span className={`font-medium ${displayStatus.color}`}>
             {displayStatus.label}
           </span>
         )}
-      </span>
-      <span className="flex items-center gap-1">
         {isWithin48Hours && !isLanded && onRefreshStatus && (
           <button 
             onClick={(e) => {
@@ -262,10 +267,11 @@ function FlightInfoRow({ carrierName, departureDate, arrivalDate, flightStatus, 
   if (flightAwareUrl) {
     return (
       <a 
-        href={flightAwareUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block hover:bg-stone-100 -mx-1 px-1 rounded transition-colors"
+        href={canLink ? flightAwareUrl : '#'}
+        target={canLink ? '_blank' : undefined}
+        rel={canLink ? 'noopener noreferrer' : undefined}
+        onClick={handleClick}
+        className={`block hover:bg-stone-100 -mx-1 px-1 rounded transition-colors ${!canLink ? 'cursor-pointer' : ''}`}
       >
         {content}
       </a>
