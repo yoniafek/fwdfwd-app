@@ -64,6 +64,16 @@ function HomeIcon() {
   );
 }
 
+function RefreshIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 4v6h-6"/>
+      <path d="M1 20v-6h6"/>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </svg>
+  );
+}
+
 // Generate Google Maps search URL for an airport
 function getAirportUrl(airportCode, cityName) {
   if (airportCode) {
@@ -73,6 +83,37 @@ function getAirportUrl(airportCode, cityName) {
     return `https://www.google.com/maps/search/${encodeURIComponent(cityName + ' airport')}`;
   }
   return null;
+}
+
+// Generate FlightAware tracking URL
+function getFlightAwareUrl(carrierName, departureDate) {
+  if (!carrierName) return null;
+  
+  // Extract flight code from carrier_name like "United • UA 1234" or "UA1234"
+  const flightMatch = carrierName.match(/([A-Z]{2,3})\s*(\d{1,4})/i);
+  if (!flightMatch) return null;
+  
+  const flightCode = `${flightMatch[1].toUpperCase()}${flightMatch[2]}`;
+  
+  // Format date for FlightAware URL
+  let dateStr = '';
+  if (departureDate) {
+    const date = new Date(departureDate);
+    if (!isNaN(date.getTime())) {
+      dateStr = `/${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
+    }
+  }
+  
+  return `https://www.flightaware.com/live/flight/${flightCode}${dateStr}`;
+}
+
+// Check if flight is within 48 hours
+function isWithin48Hours(departureDate) {
+  if (!departureDate) return false;
+  const departure = new Date(departureDate);
+  const now = new Date();
+  const hoursDiff = (departure - now) / (1000 * 60 * 60);
+  return hoursDiff <= 48 && hoursDiff >= -24; // Within 48hr future or 24hr past
 }
 
 // Clickable location link for flights (links to airport)
@@ -130,11 +171,59 @@ function LocationLink({ name, lat, lng, address, className = '' }) {
   return content;
 }
 
+// Flight status badge component
+function FlightStatusBadge({ status, flightAwareUrl, showRefresh, onRefresh }) {
+  const statusColors = {
+    'on_time': 'text-green-600',
+    'delayed': 'text-red-600',
+    'landed': 'text-stone-600',
+    'cancelled': 'text-red-600',
+    'unknown': 'text-stone-400'
+  };
+  
+  const statusLabels = {
+    'on_time': 'On time',
+    'delayed': 'Delayed',
+    'landed': 'Landed',
+    'cancelled': 'Cancelled'
+  };
+  
+  return (
+    <span className="inline-flex items-center gap-2 ml-2">
+      {status && statusLabels[status] && (
+        <span className={`text-sm font-medium ${statusColors[status] || statusColors.unknown}`}>
+          {statusLabels[status]}
+        </span>
+      )}
+      {flightAwareUrl && (
+        <a 
+          href={flightAwareUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-stone-500 hover:text-stone-700 underline"
+        >
+          View
+        </a>
+      )}
+      {showRefresh && onRefresh && (
+        <button 
+          onClick={onRefresh}
+          className="p-1 text-stone-400 hover:text-stone-600 transition-colors"
+          title="Refresh status"
+        >
+          <RefreshIcon />
+        </button>
+      )}
+    </span>
+  );
+}
+
 export default function TravelStepCard({ 
   step, 
   onEdit, 
   onDelete, 
   onMoveToTrip,
+  onRefreshFlightStatus,
   trips = [],
   isSharedView = false 
 }) {
@@ -149,6 +238,7 @@ export default function TravelStepCard({
         onEdit={onEdit}
         onDelete={onDelete}
         onMoveToTrip={onMoveToTrip}
+        onRefreshFlightStatus={onRefreshFlightStatus}
         trips={trips}
         isSharedView={isSharedView}
         showMenu={showMenu}
@@ -189,7 +279,7 @@ export default function TravelStepCard({
 }
 
 // Flight card with connected departure/arrival
-function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
+function FlightCard({ step, onEdit, onDelete, onMoveToTrip, onRefreshFlightStatus, trips, isSharedView, showMenu, setShowMenu }) {
   const startTime = formatTimeRaw(step.start_datetime);
   const endTime = step.end_datetime ? formatTimeRaw(step.end_datetime) : null;
   
@@ -197,6 +287,9 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
   const { name: destName, code: destCode } = parseLocationWithCode(step.destination_name);
   
   const { duration, timezoneOffset } = calculateFlightDuration(step.start_datetime, step.end_datetime);
+  
+  const flightAwareUrl = getFlightAwareUrl(step.carrier_name, step.start_datetime);
+  const showFlightStatus = isWithin48Hours(step.start_datetime);
 
   return (
     <div className="bg-stone-50 rounded-xl border border-stone-200 group relative hover:border-stone-300 transition overflow-hidden">
@@ -228,9 +321,29 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
               {!isSharedView && step.confirmation_number && (
                 <div>Confirmation <span className="font-medium">{step.confirmation_number}</span></div>
               )}
-              {/* Flight carrier and number */}
+              {/* Flight carrier and number with status */}
               {step.carrier_name && (
-                <div>Flight <span className="font-medium">{step.carrier_name}</span></div>
+                <div className="flex items-center flex-wrap">
+                  <span>Flight <span className="font-medium">{step.carrier_name}</span></span>
+                  {showFlightStatus && (
+                    <FlightStatusBadge 
+                      status={step.flight_status}
+                      flightAwareUrl={flightAwareUrl}
+                      showRefresh={showFlightStatus}
+                      onRefresh={() => onRefreshFlightStatus?.(step.id)}
+                    />
+                  )}
+                  {!showFlightStatus && flightAwareUrl && (
+                    <a 
+                      href={flightAwareUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 text-sm text-stone-500 hover:text-stone-700 underline"
+                    >
+                      View
+                    </a>
+                  )}
+                </div>
               )}
               {/* Terminal and Gate */}
               <div className="flex gap-4">
@@ -285,8 +398,8 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
   // Get display title: custom_title > origin_name > extracted street address
   const displayTitle = step.custom_title || step.origin_name || extractStreetAddress(step.origin_address);
   
-  // Show address as subtitle (different from title)
-  const showAddress = step.origin_address && step.origin_address !== displayTitle;
+  // Get location for address subtitle - show city/state part or full address
+  const addressSubtitle = getAddressSubtitle(step.origin_address, step.origin_name);
 
   return (
     <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative hover:border-stone-300 transition">
@@ -318,9 +431,9 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
             lng={step.origin_lng}
             address={step.origin_address}
           />
-          {/* Address as subtitle */}
-          {showAddress && (
-            <div className="text-sm text-stone-500 mt-0.5">{step.origin_address}</div>
+          {/* Address subtitle - always show if available */}
+          {addressSubtitle && (
+            <div className="text-sm text-stone-500 mt-0.5">{addressSubtitle}</div>
           )}
         </div>
       </div>
@@ -480,7 +593,6 @@ function formatTimeRaw(datetime) {
   
   // If it's an ISO string with time, extract the time part directly
   if (typeof datetime === 'string') {
-    // Match time from ISO format: 2025-11-19T13:00:00-08:00 or 2025-11-19T13:00:00
     const timeMatch = datetime.match(/T(\d{2}):(\d{2})/);
     if (timeMatch) {
       let hours = parseInt(timeMatch[1], 10);
@@ -491,7 +603,6 @@ function formatTimeRaw(datetime) {
     }
   }
   
-  // Fallback to Date parsing (will convert to local timezone)
   const date = new Date(datetime);
   return date.toLocaleTimeString('en-US', { 
     hour: 'numeric', 
@@ -536,11 +647,9 @@ function calculateFlightDuration(startDatetime, endDatetime) {
     return { duration: null, timezoneOffset: null };
   }
   
-  // Extract timezone offsets from ISO strings
   const startTz = extractTimezoneOffset(startDatetime);
   const endTz = extractTimezoneOffset(endDatetime);
   
-  // Parse times as UTC to avoid browser timezone conversion
   const start = new Date(startDatetime);
   const end = new Date(endDatetime);
   
@@ -561,7 +670,6 @@ function calculateFlightDuration(startDatetime, endDatetime) {
     duration = `${hours}hr${minutes.toString().padStart(2, '0')}`;
   }
   
-  // Calculate timezone difference
   let timezoneOffset = null;
   if (startTz !== null && endTz !== null && startTz !== endTz) {
     const tzDiff = endTz - startTz;
@@ -610,12 +718,29 @@ function detectIfHotel(name, address) {
 function extractStreetAddress(fullAddress) {
   if (!fullAddress) return 'Stay';
   
-  // Try to get just the street number and name
-  // "123 Main Street, City, State 12345" -> "123 Main Street"
   const parts = fullAddress.split(',');
   if (parts.length > 0) {
     return parts[0].trim();
   }
+  
+  return fullAddress;
+}
+
+// Get address subtitle (city, state) for stays
+function getAddressSubtitle(fullAddress, originName) {
+  if (!fullAddress) return null;
+  
+  // If the address is the same as the name, extract city/state portion
+  const parts = fullAddress.split(',').map(p => p.trim());
+  
+  if (parts.length >= 2) {
+    // Return everything after the first part (street address)
+    // e.g., "123 Main St, Teaneck, NJ 07666" -> "Teaneck, NJ 07666"
+    return parts.slice(1).join(', ');
+  }
+  
+  // If address equals name, don't show it as subtitle
+  if (fullAddress === originName) return null;
   
   return fullAddress;
 }

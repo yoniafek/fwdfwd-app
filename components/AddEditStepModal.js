@@ -16,6 +16,34 @@ const TYPE_OPTIONS = [
   { key: 'bus', label: 'Bus', icon: BusIcon },
 ];
 
+// Convert ISO datetime to datetime-local format (YYYY-MM-DDTHH:MM)
+function toDatetimeLocal(isoString) {
+  if (!isoString) return '';
+  
+  // Handle ISO string with timezone: 2025-11-19T13:00:00-08:00
+  // Extract the date and time parts without timezone conversion
+  const match = isoString.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if (match) {
+    return `${match[1]}T${match[2]}`;
+  }
+  
+  // Fallback: try to parse and format
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return '';
+    
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  } catch {
+    return '';
+  }
+}
+
 export default function AddEditStepModal({ 
   step = null, 
   onSave, 
@@ -53,8 +81,8 @@ export default function AddEditStepModal({
     if (step) {
       setFormData({
         type: step.type || 'flight',
-        start_datetime: step.start_datetime || '',
-        end_datetime: step.end_datetime || '',
+        start_datetime: toDatetimeLocal(step.start_datetime),
+        end_datetime: toDatetimeLocal(step.end_datetime),
         custom_title: step.custom_title || '',
         origin_name: step.origin_name || '',
         origin_address: step.origin_address || '',

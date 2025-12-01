@@ -44,7 +44,6 @@ export default async function handler(req, res) {
 
     if (storeError) {
       console.error('Error storing email:', storeError);
-      // Continue processing even if storage fails
     } else {
       console.log('Stored raw email with ID:', storedEmail.id);
     }
@@ -60,11 +59,23 @@ export default async function handler(req, res) {
 Email content:
 ${emailContent}
 
-CRITICAL INSTRUCTIONS:
+CRITICAL TIMEZONE INSTRUCTIONS:
+1. ALL times must be in LOCAL TIME with timezone offset
+2. Departure time = LOCAL time at departure airport
+3. Arrival time = LOCAL time at arrival airport
+4. Use ISO 8601 format: "YYYY-MM-DDTHH:MM:SS±HH:00"
+5. Common US timezone offsets:
+   - EST/EDT (Eastern): -05:00 / -04:00
+   - CST/CDT (Central): -06:00 / -05:00
+   - MST/MDT (Mountain): -07:00 / -06:00
+   - PST/PDT (Pacific): -08:00 / -07:00
+6. If timezone is unclear, infer from airport location
+
+EXTRACTION INSTRUCTIONS:
 1. Extract EXACT times from the email - do not invent or approximate
-2. For flights: extract departure AND arrival times for each segment
-3. Include flight numbers in carrier_name (e.g., "United Airlines UA 1234")
-4. Use ISO 8601 format with timezone if available, or use UTC if timezone is unclear
+2. For flights: extract departure AND arrival times (both in LOCAL time)
+3. Include airline + flight number in carrier_name (e.g., "United • UA 1234")
+4. Extract terminal and gate if available
 5. For multi-leg flights, create separate segments for EACH flight
 6. Return ONLY valid JSON with no markdown, explanations, or code blocks
 
@@ -73,11 +84,15 @@ Extract this information:
   "type": "flight" | "hotel" | "car" | "train" | "bus" | "unknown",
   "segments": [
     {
-      "start_datetime": "YYYY-MM-DDTHH:MM:SSZ",  // Exact departure/check-in time
-      "end_datetime": "YYYY-MM-DDTHH:MM:SSZ",    // Exact arrival/check-out time (REQUIRED for flights)
-      "origin_name": "City/Airport Code",         // e.g., "Newark (EWR)"
-      "destination_name": "City/Airport Code",    // e.g., "Los Angeles (LAX)"
-      "carrier_name": "Airline/Hotel with Number", // e.g., "United Airlines UA 1234"
+      "start_datetime": "YYYY-MM-DDTHH:MM:SS-08:00",  // LOCAL departure time with offset
+      "end_datetime": "YYYY-MM-DDTHH:MM:SS-05:00",    // LOCAL arrival time with offset
+      "origin_name": "City Name (ABC)",               // City name with airport code
+      "origin_terminal": "3",                          // Terminal if available, null otherwise
+      "origin_gate": "A4",                             // Gate if available, null otherwise
+      "destination_name": "City Name (XYZ)",          // City name with airport code
+      "destination_terminal": "A",                     // Terminal if available
+      "destination_gate": null,                        // Gate if available
+      "carrier_name": "Airline • XX 1234",            // Airline name + flight number
       "confirmation_number": "XXXXXX"
     }
   ]
@@ -85,25 +100,40 @@ Extract this information:
 
 EXAMPLES:
 
-Flight with layover:
+Flight from SFO to EWR (PST to EST):
 {
   "type": "flight",
   "segments": [
     {
-      "start_datetime": "2025-12-15T08:00:00-05:00",
-      "end_datetime": "2025-12-15T11:30:00-06:00",
-      "origin_name": "Newark (EWR)",
-      "destination_name": "Chicago (ORD)",
-      "carrier_name": "United Airlines UA 1234",
+      "start_datetime": "2025-11-19T13:00:00-08:00",
+      "end_datetime": "2025-11-19T21:29:00-05:00",
+      "origin_name": "San Francisco (SFO)",
+      "origin_terminal": "3",
+      "origin_gate": "A4",
+      "destination_name": "Newark (EWR)",
+      "destination_terminal": "A",
+      "destination_gate": "5",
+      "carrier_name": "United • UA 2011",
       "confirmation_number": "ABC123"
-    },
+    }
+  ]
+}
+
+Return flight from EWR to SFO (EST to PST):
+{
+  "type": "flight",
+  "segments": [
     {
-      "start_datetime": "2025-12-15T14:00:00-06:00",
-      "end_datetime": "2025-12-15T16:45:00-08:00",
-      "origin_name": "Chicago (ORD)",
-      "destination_name": "Los Angeles (LAX)",
-      "carrier_name": "United Airlines UA 5678",
-      "confirmation_number": "ABC123"
+      "start_datetime": "2025-12-02T18:10:00-05:00",
+      "end_datetime": "2025-12-02T21:50:00-08:00",
+      "origin_name": "Newark (EWR)",
+      "origin_terminal": "A",
+      "origin_gate": null,
+      "destination_name": "San Francisco (SFO)",
+      "destination_terminal": "3",
+      "destination_gate": null,
+      "carrier_name": "Alaska • AS 293",
+      "confirmation_number": "XYZ789"
     }
   ]
 }
@@ -113,12 +143,16 @@ Hotel:
   "type": "hotel",
   "segments": [
     {
-      "start_datetime": "2025-12-20T15:00:00-05:00",
-      "end_datetime": "2025-12-23T11:00:00-05:00",
-      "origin_name": "Marriott Downtown NYC",
+      "start_datetime": "2025-11-20T15:00:00-05:00",
+      "end_datetime": "2025-11-27T11:00:00-05:00",
+      "origin_name": "Aloft New York Brooklyn",
+      "origin_terminal": null,
+      "origin_gate": null,
       "destination_name": null,
+      "destination_terminal": null,
+      "destination_gate": null,
       "carrier_name": "Marriott",
-      "confirmation_number": "XYZ789"
+      "confirmation_number": "12345678"
     }
   ]
 }
@@ -140,7 +174,6 @@ If you cannot extract valid booking details with confidence, return:
       } else {
         console.error('Failed to parse Claude response:', responseText);
         
-        // Update stored email with error
         if (storedEmail) {
           await supabase
             .from('raw_emails')
@@ -243,14 +276,18 @@ If you cannot extract valid booking details with confidence, return:
       });
     }
 
-    // Add segments to timeline
+    // Add segments to timeline with all extracted fields
     const travelSteps = parsed.segments.map(segment => ({
       user_id: userId,
       type: parsed.type,
       start_datetime: segment.start_datetime,
       end_datetime: segment.end_datetime,
       origin_name: segment.origin_name,
+      origin_terminal: segment.origin_terminal || null,
+      origin_gate: segment.origin_gate || null,
       destination_name: segment.destination_name,
+      destination_terminal: segment.destination_terminal || null,
+      destination_gate: segment.destination_gate || null,
       carrier_name: segment.carrier_name,
       confirmation_number: segment.confirmation_number
     }));
@@ -268,26 +305,21 @@ If you cannot extract valid booking details with confidence, return:
 
     console.log('Successfully added travel steps');
 
-    // Format segments for email
+    // Format segments for confirmation email
     const segmentDescriptions = parsed.segments.map(seg => {
       if (parsed.type === 'flight') {
-        const dept = new Date(seg.start_datetime).toLocaleString('en-US', { 
-          weekday: 'short', month: 'short', day: 'numeric', 
-          hour: 'numeric', minute: '2-digit', timeZoneName: 'short' 
-        });
-        const arr = seg.end_datetime ? new Date(seg.end_datetime).toLocaleString('en-US', { 
-          weekday: 'short', month: 'short', day: 'numeric', 
-          hour: 'numeric', minute: '2-digit', timeZoneName: 'short' 
-        }) : 'TBD';
-        return `${seg.carrier_name}: ${seg.origin_name} → ${seg.destination_name}<br>Departs: ${dept}<br>Arrives: ${arr}`;
+        // Extract time from ISO string for display
+        const deptTime = formatTimeFromISO(seg.start_datetime);
+        const arrTime = formatTimeFromISO(seg.end_datetime);
+        const deptDate = formatDateFromISO(seg.start_datetime);
+        
+        return `<strong>${seg.carrier_name}</strong><br>
+${seg.origin_name} → ${seg.destination_name}<br>
+${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
       } else if (parsed.type === 'hotel') {
-        const checkin = new Date(seg.start_datetime).toLocaleDateString('en-US', { 
-          weekday: 'short', month: 'short', day: 'numeric' 
-        });
-        const checkout = seg.end_datetime ? new Date(seg.end_datetime).toLocaleDateString('en-US', { 
-          weekday: 'short', month: 'short', day: 'numeric' 
-        }) : 'TBD';
-        return `${seg.origin_name}<br>Check-in: ${checkin}<br>Check-out: ${checkout}`;
+        const checkin = formatDateFromISO(seg.start_datetime);
+        const checkout = formatDateFromISO(seg.end_datetime);
+        return `<strong>${seg.origin_name}</strong><br>Check-in: ${checkin}<br>Check-out: ${checkout}`;
       }
       return `${seg.origin_name} → ${seg.destination_name || ''}`;
     }).join('<br><br>');
@@ -306,7 +338,7 @@ If you cannot extract valid booking details with confidence, return:
         
         ${parsed.segments.length > 1 ? `<p><em>Added ${parsed.segments.length} segments to your journey</em></p>` : ''}
         
-        <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #000; color: #fff; text-decoration: none; border-radius: 6px; margin-top: 16px;">View Your Timeline</a></p>
+        <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Timeline</a></p>
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">Keep forwarding your confirmations to <strong>add@fwdfwd.com</strong> to build your timeline!</p>
         
@@ -324,4 +356,31 @@ If you cannot extract valid booking details with confidence, return:
     console.error('Error processing email:', error);
     return res.status(500).json({ error: 'Internal server error', details: error.message });
   }
+}
+
+// Helper to format time from ISO string without timezone conversion
+function formatTimeFromISO(isoString) {
+  if (!isoString) return 'TBD';
+  const match = isoString.match(/T(\d{2}):(\d{2})/);
+  if (match) {
+    let hours = parseInt(match[1], 10);
+    const minutes = match[2];
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    return `${hours}:${minutes} ${ampm}`;
+  }
+  return 'TBD';
+}
+
+// Helper to format date from ISO string
+function formatDateFromISO(isoString) {
+  if (!isoString) return 'TBD';
+  const match = isoString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const date = new Date(match[1], parseInt(match[2]) - 1, match[3]);
+    return `${days[date.getDay()]} ${months[date.getMonth()]} ${parseInt(match[3])}`;
+  }
+  return 'TBD';
 }
