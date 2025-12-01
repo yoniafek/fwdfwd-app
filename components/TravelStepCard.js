@@ -23,7 +23,7 @@ export const TRAVEL_TYPES = {
   activity: { icon: ActivityIcon, label: 'Activity' }
 };
 
-// Additional icons for new types
+// Additional icons
 function FerryIcon() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
@@ -56,10 +56,17 @@ function CircleIcon() {
   );
 }
 
+function HomeIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+    </svg>
+  );
+}
+
 // Generate Google Maps search URL for an airport
 function getAirportUrl(airportCode, cityName) {
   if (airportCode) {
-    // Search for airport by code
     return `https://www.google.com/maps/search/${encodeURIComponent(airportCode + ' airport')}`;
   }
   if (cityName) {
@@ -68,7 +75,7 @@ function getAirportUrl(airportCode, cityName) {
   return null;
 }
 
-// Clickable location link component for flights (links to airport)
+// Clickable location link for flights (links to airport)
 function AirportLink({ name, code, className = '' }) {
   const url = getAirportUrl(code, name);
   
@@ -96,7 +103,7 @@ function AirportLink({ name, code, className = '' }) {
   return content;
 }
 
-// Clickable location link component for non-flights
+// Clickable location link for non-flights
 function LocationLink({ name, lat, lng, address, className = '' }) {
   const url = getLocationUrl(lat, lng, address || name);
   
@@ -135,7 +142,6 @@ export default function TravelStepCard({
   const typeConfig = TRAVEL_TYPES[step.type] || TRAVEL_TYPES.activity;
   const TypeIcon = typeConfig.icon;
 
-  // Render flight card with connected departure/arrival
   if (step.type === 'flight') {
     return (
       <FlightCard 
@@ -151,7 +157,6 @@ export default function TravelStepCard({
     );
   }
 
-  // Render stay card (hotel)
   if (step.type === 'hotel') {
     return (
       <StayCard 
@@ -167,7 +172,6 @@ export default function TravelStepCard({
     );
   }
 
-  // Default card for other types
   return (
     <DefaultCard 
       step={step}
@@ -184,16 +188,14 @@ export default function TravelStepCard({
   );
 }
 
-// Flight card with connected departure/arrival design matching mockup
+// Flight card with connected departure/arrival
 function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
-  const startTime = formatTime(step.start_datetime);
-  const endTime = step.end_datetime ? formatTime(step.end_datetime) : null;
+  const startTime = formatTimeRaw(step.start_datetime);
+  const endTime = step.end_datetime ? formatTimeRaw(step.end_datetime) : null;
   
-  // Parse origin/destination for city name and airport code
   const { name: originName, code: originCode } = parseLocationWithCode(step.origin_name);
   const { name: destName, code: destCode } = parseLocationWithCode(step.destination_name);
   
-  // Calculate flight duration and timezone offset
   const { duration, timezoneOffset } = calculateFlightDuration(step.start_datetime, step.end_datetime);
 
   return (
@@ -222,17 +224,19 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
             <AirportLink name={originName} code={originCode} />
             
             <div className="text-sm text-stone-600 space-y-0.5 mt-1">
+              {/* Confirmation first */}
+              {!isSharedView && step.confirmation_number && (
+                <div>Confirmation <span className="font-medium">{step.confirmation_number}</span></div>
+              )}
               {/* Flight carrier and number */}
               {step.carrier_name && (
                 <div>Flight <span className="font-medium">{step.carrier_name}</span></div>
               )}
-              
-              {/* Terminal and Gate row */}
+              {/* Terminal and Gate */}
               <div className="flex gap-4">
                 <span>Terminal <span className="font-medium">{step.origin_terminal || '–'}</span></span>
                 <span>Gate <span className="font-medium">{step.origin_gate || '–'}</span></span>
               </div>
-              
               {/* Duration with timezone offset */}
               {duration && (
                 <div>
@@ -267,22 +271,22 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
           </div>
         </div>
       )}
-
-      {/* Confirmation (owner only) - subtle at bottom */}
-      {!isSharedView && step.confirmation_number && (
-        <div className="px-4 pb-3 border-t border-stone-100">
-          <div className="text-xs text-stone-400 font-mono pt-2">
-            Confirmation: {step.confirmation_number}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// Stay card (hotel) design
+// Stay card - for hotels and homes
 function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const nights = calculateNights(step.start_datetime, step.end_datetime);
+  
+  // Determine if this is a hotel or a home/other stay
+  const isHotel = detectIfHotel(step.origin_name, step.origin_address);
+  
+  // Get display title: custom_title > origin_name > extracted street address
+  const displayTitle = step.custom_title || step.origin_name || extractStreetAddress(step.origin_address);
+  
+  // Show address as subtitle (different from title)
+  const showAddress = step.origin_address && step.origin_address !== displayTitle;
 
   return (
     <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative hover:border-stone-300 transition">
@@ -298,29 +302,25 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
       />
 
       <div className="flex items-start gap-4">
-        <div className="flex-shrink-0 w-16"></div>
+        {/* Nights in same position as time for flights */}
+        <div className="flex-shrink-0 w-16 text-right">
+          {nights && (
+            <div className="text-sm text-stone-600">{nights} night{nights !== 1 ? 's' : ''}</div>
+          )}
+        </div>
         <div className="flex-shrink-0 text-stone-700">
-          <HotelIcon />
+          {isHotel ? <HotelIcon /> : <HomeIcon />}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            {nights && (
-              <span className="text-sm text-stone-600">{nights} night{nights !== 1 ? 's' : ''}</span>
-            )}
-            <LocationLink 
-              name={step.origin_name} 
-              lat={step.origin_lat}
-              lng={step.origin_lng}
-              address={step.origin_address}
-            />
-          </div>
-          {step.origin_address && (
+          <LocationLink 
+            name={displayTitle} 
+            lat={step.origin_lat}
+            lng={step.origin_lng}
+            address={step.origin_address}
+          />
+          {/* Address as subtitle */}
+          {showAddress && (
             <div className="text-sm text-stone-500 mt-0.5">{step.origin_address}</div>
-          )}
-          {!isSharedView && step.confirmation_number && (
-            <div className="text-xs text-stone-400 font-mono mt-2">
-              Confirmation: {step.confirmation_number}
-            </div>
           )}
         </div>
       </div>
@@ -330,7 +330,7 @@ function StayCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, s
 
 // Default card for other travel types
 function DefaultCard({ step, typeConfig, TypeIcon, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
-  const startTime = formatTime(step.start_datetime);
+  const startTime = formatTimeRaw(step.start_datetime);
 
   return (
     <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 group relative hover:border-stone-300 transition">
@@ -473,8 +473,25 @@ function ActionMenu({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
 }
 
 // Helper functions
-function formatTime(datetime) {
+
+// Format time without timezone conversion - extract hour:minute from ISO string
+function formatTimeRaw(datetime) {
   if (!datetime) return '';
+  
+  // If it's an ISO string with time, extract the time part directly
+  if (typeof datetime === 'string') {
+    // Match time from ISO format: 2025-11-19T13:00:00-08:00 or 2025-11-19T13:00:00
+    const timeMatch = datetime.match(/T(\d{2}):(\d{2})/);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1], 10);
+      const minutes = timeMatch[2];
+      const ampm = hours >= 12 ? 'pm' : 'am';
+      hours = hours % 12 || 12;
+      return `${hours}:${minutes}${ampm}`;
+    }
+  }
+  
+  // Fallback to Date parsing (will convert to local timezone)
   const date = new Date(datetime);
   return date.toLocaleTimeString('en-US', { 
     hour: 'numeric', 
@@ -486,19 +503,16 @@ function formatTime(datetime) {
 function parseLocationWithCode(locationStr) {
   if (!locationStr) return { name: '', code: '' };
   
-  // Try to extract airport code like "San Francisco (SFO)" or "San Francisco SFO"
   const parenMatch = locationStr.match(/^(.+?)\s*\(([A-Z]{3})\)$/);
   if (parenMatch) {
     return { name: parenMatch[1].trim(), code: parenMatch[2] };
   }
   
-  // Match "City ABC" pattern at end
   const spaceMatch = locationStr.match(/^(.+?)\s+([A-Z]{3})$/);
   if (spaceMatch) {
     return { name: spaceMatch[1].trim(), code: spaceMatch[2] };
   }
   
-  // Check if the whole string is just an airport code
   if (/^[A-Z]{3}$/.test(locationStr.trim())) {
     return { name: locationStr.trim(), code: locationStr.trim() };
   }
@@ -522,10 +536,14 @@ function calculateFlightDuration(startDatetime, endDatetime) {
     return { duration: null, timezoneOffset: null };
   }
   
+  // Extract timezone offsets from ISO strings
+  const startTz = extractTimezoneOffset(startDatetime);
+  const endTz = extractTimezoneOffset(endDatetime);
+  
+  // Parse times as UTC to avoid browser timezone conversion
   const start = new Date(startDatetime);
   const end = new Date(endDatetime);
   
-  // Calculate actual elapsed time in minutes
   const diffMs = end - start;
   const diffMinutes = Math.round(diffMs / (1000 * 60));
   
@@ -533,7 +551,6 @@ function calculateFlightDuration(startDatetime, endDatetime) {
     return { duration: null, timezoneOffset: null };
   }
   
-  // Format duration as "Xhr YYmin" or just "Xhr" if no minutes
   const hours = Math.floor(diffMinutes / 60);
   const minutes = diffMinutes % 60;
   
@@ -544,15 +561,8 @@ function calculateFlightDuration(startDatetime, endDatetime) {
     duration = `${hours}hr${minutes.toString().padStart(2, '0')}`;
   }
   
-  // Try to detect timezone offset from the datetime strings
-  // If both have timezone info, we can calculate the difference
+  // Calculate timezone difference
   let timezoneOffset = null;
-  
-  // Check if the original strings contain timezone offset info
-  // Format could be: "2025-12-15T08:00:00-05:00" or "2025-12-15T08:00:00Z"
-  const startTz = extractTimezoneOffset(startDatetime);
-  const endTz = extractTimezoneOffset(endDatetime);
-  
   if (startTz !== null && endTz !== null && startTz !== endTz) {
     const tzDiff = endTz - startTz;
     const sign = tzDiff >= 0 ? '+' : '';
@@ -562,11 +572,9 @@ function calculateFlightDuration(startDatetime, endDatetime) {
   return { duration, timezoneOffset };
 }
 
-// Extract timezone offset in hours from ISO string
 function extractTimezoneOffset(datetimeStr) {
   if (!datetimeStr || typeof datetimeStr !== 'string') return null;
   
-  // Match timezone offset like "-05:00" or "+03:00" or "Z"
   const tzMatch = datetimeStr.match(/([+-])(\d{2}):(\d{2})$/);
   if (tzMatch) {
     const sign = tzMatch[1] === '+' ? 1 : -1;
@@ -575,10 +583,39 @@ function extractTimezoneOffset(datetimeStr) {
     return sign * (hours + minutes / 60);
   }
   
-  // Z means UTC (0 offset)
   if (datetimeStr.endsWith('Z')) {
     return 0;
   }
   
   return null;
+}
+
+// Detect if a location is likely a hotel
+function detectIfHotel(name, address) {
+  if (!name && !address) return false;
+  
+  const hotelKeywords = [
+    'hotel', 'inn', 'suites', 'resort', 'motel', 'lodge', 
+    'marriott', 'hilton', 'hyatt', 'sheraton', 'westin', 
+    'courtyard', 'hampton', 'holiday inn', 'best western',
+    'radisson', 'wyndham', 'doubletree', 'embassy', 'aloft',
+    'fairfield', 'la quinta', 'comfort inn', 'days inn'
+  ];
+  
+  const searchText = ((name || '') + ' ' + (address || '')).toLowerCase();
+  return hotelKeywords.some(keyword => searchText.includes(keyword));
+}
+
+// Extract street address from full address for display as title
+function extractStreetAddress(fullAddress) {
+  if (!fullAddress) return 'Stay';
+  
+  // Try to get just the street number and name
+  // "123 Main Street, City, State 12345" -> "123 Main Street"
+  const parts = fullAddress.split(',');
+  if (parts.length > 0) {
+    return parts[0].trim();
+  }
+  
+  return fullAddress;
 }

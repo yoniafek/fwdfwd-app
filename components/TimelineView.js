@@ -135,7 +135,7 @@ function DistanceConnector({ fromStep, toStep }) {
   );
 }
 
-// Helper to group steps by date
+// Helper to group steps by date with proper sorting
 function groupStepsByDate(steps) {
   const groups = new Map();
   
@@ -154,9 +154,21 @@ function groupStepsByDate(steps) {
     groups.get(dateKey).steps.push(step);
   });
   
-  // Sort steps within each day by time
+  // Sort steps within each day:
+  // 1. By time (earliest first)
+  // 2. Stays (hotels) always go last in the day
   groups.forEach(group => {
-    group.steps.sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime));
+    group.steps.sort((a, b) => {
+      // Stays go last
+      const aIsStay = a.type === 'hotel';
+      const bIsStay = b.type === 'hotel';
+      
+      if (aIsStay && !bIsStay) return 1;  // a goes after b
+      if (!aIsStay && bIsStay) return -1; // a goes before b
+      
+      // Otherwise sort by time
+      return new Date(a.start_datetime) - new Date(b.start_datetime);
+    });
   });
   
   return Array.from(groups.values());

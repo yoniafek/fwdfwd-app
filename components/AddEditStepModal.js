@@ -30,6 +30,7 @@ export default function AddEditStepModal({
     type: 'flight',
     start_datetime: '',
     end_datetime: '',
+    custom_title: '',
     origin_name: '',
     origin_address: '',
     origin_lat: null,
@@ -45,6 +46,8 @@ export default function AddEditStepModal({
     carrier_name: '',
     confirmation_number: ''
   });
+  
+  const [detectedAsHotel, setDetectedAsHotel] = useState(true);
 
   useEffect(() => {
     if (step) {
@@ -52,6 +55,7 @@ export default function AddEditStepModal({
         type: step.type || 'flight',
         start_datetime: step.start_datetime || '',
         end_datetime: step.end_datetime || '',
+        custom_title: step.custom_title || '',
         origin_name: step.origin_name || '',
         origin_address: step.origin_address || '',
         origin_lat: step.origin_lat || null,
@@ -67,6 +71,10 @@ export default function AddEditStepModal({
         carrier_name: step.carrier_name || '',
         confirmation_number: step.confirmation_number || ''
       });
+      
+      if (step.type === 'hotel') {
+        setDetectedAsHotel(detectIfHotel(step.origin_name, step.origin_address));
+      }
     }
   }, [step]);
 
@@ -76,12 +84,18 @@ export default function AddEditStepModal({
     
     const autocomplete = new window.google.maps.places.Autocomplete(originInputRef.current, {
       types: formData.type === 'flight' ? ['airport'] : ['establishment', 'geocode'],
-      fields: ['name', 'formatted_address', 'geometry', 'place_id']
+      fields: ['name', 'formatted_address', 'geometry', 'place_id', 'types']
     });
 
     autocomplete.addListener('place_changed', () => {
       const place = autocomplete.getPlace();
       if (place && place.geometry) {
+        const isHotel = place.types?.some(t => 
+          ['lodging', 'hotel', 'motel'].includes(t)
+        ) || detectIfHotel(place.name, place.formatted_address);
+        
+        setDetectedAsHotel(isHotel);
+        
         setFormData(prev => ({ 
           ...prev, 
           origin_name: place.name || place.formatted_address,
@@ -147,7 +161,6 @@ export default function AddEditStepModal({
     setFormData(prev => ({ 
       ...prev, 
       type: newType,
-      // Clear destination for types that don't use it
       ...(newType === 'hotel' && {
         destination_name: '',
         destination_address: '',
@@ -156,7 +169,6 @@ export default function AddEditStepModal({
         destination_terminal: '',
         destination_gate: ''
       }),
-      // Clear terminal/gate for non-flights
       ...(newType !== 'flight' && {
         origin_terminal: '',
         origin_gate: '',
@@ -164,11 +176,16 @@ export default function AddEditStepModal({
         destination_gate: ''
       })
     }));
+    
+    if (newType === 'hotel') {
+      setDetectedAsHotel(true);
+    }
   }
 
   const showEndDateTime = ['hotel', 'flight', 'car'].includes(formData.type);
   const showDestination = !['hotel', 'restaurant', 'activity'].includes(formData.type);
   const showTerminalGate = formData.type === 'flight';
+  const showCustomTitle = formData.type === 'hotel' && !detectedAsHotel;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
@@ -238,7 +255,7 @@ export default function AddEditStepModal({
           {/* Origin / Location */}
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-1">
-              {formData.type === 'hotel' ? 'Hotel / Address' :
+              {formData.type === 'hotel' ? 'Location' :
                formData.type === 'restaurant' ? 'Restaurant' :
                formData.type === 'activity' ? 'Location' :
                formData.type === 'flight' ? 'Departure Airport' :
@@ -253,11 +270,14 @@ export default function AddEditStepModal({
                 updateField('origin_lat', null);
                 updateField('origin_lng', null);
                 updateField('origin_address', '');
+                if (formData.type === 'hotel') {
+                  setDetectedAsHotel(detectIfHotel(e.target.value, ''));
+                }
               }}
               className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
               placeholder={
                 formData.type === 'flight' ? 'Search airports...' :
-                formData.type === 'hotel' ? 'Search hotels...' :
+                formData.type === 'hotel' ? 'Search hotels, homes, addresses...' :
                 'Search location...'
               }
               required
@@ -269,6 +289,26 @@ export default function AddEditStepModal({
               </div>
             )}
           </div>
+
+          {/* Custom Title (for non-hotel stays like homes) */}
+          {showCustomTitle && (
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1">
+                Display Name
+                <span className="text-stone-400 font-normal ml-1">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={formData.custom_title}
+                onChange={(e) => updateField('custom_title', e.target.value)}
+                className="w-full px-3 py-2.5 border border-stone-300 rounded-lg focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                placeholder="e.g., Home, Mom's Place, Airbnb"
+              />
+              <p className="text-xs text-stone-500 mt-1">
+                If blank, we'll use the street address as the title
+              </p>
+            </div>
+          )}
 
           {/* Origin Terminal & Gate (flights only) */}
           {showTerminalGate && (
@@ -370,6 +410,9 @@ export default function AddEditStepModal({
                formData.type === 'train' ? 'Train Service' :
                formData.type === 'bus' ? 'Bus Company' :
                'Provider'}
+              {formData.type !== 'flight' && (
+                <span className="text-stone-400 font-normal ml-1">(optional)</span>
+              )}
             </label>
             <input
               type="text"
@@ -390,6 +433,7 @@ export default function AddEditStepModal({
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-1">
               Confirmation Number
+              <span className="text-stone-400 font-normal ml-1">(optional)</span>
             </label>
             <input
               type="text"
@@ -420,4 +464,21 @@ export default function AddEditStepModal({
       </div>
     </div>
   );
+}
+
+// Detect if a location is likely a hotel
+function detectIfHotel(name, address) {
+  if (!name && !address) return true; // Default to hotel
+  
+  const hotelKeywords = [
+    'hotel', 'inn', 'suites', 'resort', 'motel', 'lodge', 
+    'marriott', 'hilton', 'hyatt', 'sheraton', 'westin', 
+    'courtyard', 'hampton', 'holiday inn', 'best western',
+    'radisson', 'wyndham', 'doubletree', 'embassy', 'aloft',
+    'fairfield', 'la quinta', 'comfort inn', 'days inn',
+    'airbnb', 'vrbo'
+  ];
+  
+  const searchText = ((name || '') + ' ' + (address || '')).toLowerCase();
+  return hotelKeywords.some(keyword => searchText.includes(keyword));
 }
