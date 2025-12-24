@@ -6,7 +6,6 @@ import { getSupabase, getCurrentUser, onAuthStateChange } from '../lib/supabase'
 import { fetchTravelSteps } from '../lib/travelSteps';
 import { fetchTrips } from '../lib/trips';
 import TimelineView from '../components/TimelineView';
-import TripsDashboard from '../components/TripsDashboard';
 import Header from '../components/Header';
 import AuthModal from '../components/AuthModal';
 import AddEditStepModal from '../components/AddEditStepModal';
@@ -23,26 +22,16 @@ function PlusIcon() {
   );
 }
 
-function BackIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
-    </svg>
-  );
-}
-
 export default function HomePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [travelSteps, setTravelSteps] = useState([]);
   const [trips, setTrips] = useState([]);
-  const [selectedTrip, setSelectedTrip] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingStep, setEditingStep] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [googleMapsLoaded, setGoogleMapsLoaded] = useState(false);
-  const [reorganizing, setReorganizing] = useState(false);
 
   // Check for Google Maps
   useEffect(() => {
@@ -137,44 +126,9 @@ export default function HomePage() {
       setUser(null);
       setTravelSteps([]);
       setTrips([]);
-      setSelectedTrip(null);
     } catch (error) {
       console.error('Error signing out:', error);
     }
-  }
-
-  async function handleReorganizeTrips() {
-    if (!user || reorganizing) return;
-    
-    setReorganizing(true);
-    try {
-      const response = await fetch('/api/recompute-trips', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: user.id })
-      });
-      
-      if (response.ok) {
-        await loadUserData();
-      } else {
-        const error = await response.json();
-        alert('Failed to organize trips: ' + (error.message || 'Unknown error'));
-      }
-    } catch (err) {
-      console.error('Error reorganizing trips:', err);
-      alert('Failed to organize trips');
-    }
-    setReorganizing(false);
-  }
-
-  function getUnassignedSteps() {
-    return travelSteps.filter(s => !s.trip_id);
-  }
-
-  function getStepsForTrip(tripId) {
-    return travelSteps
-      .filter(s => s.trip_id === tripId)
-      .sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime));
   }
 
   // Step CRUD operations
@@ -260,46 +214,21 @@ export default function HomePage() {
     );
   }
 
-  // LOGGED IN - Show Trips Dashboard or Selected Trip Timeline
+  // LOGGED IN - Show Timeline
   if (user) {
-    const tripSteps = selectedTrip ? getStepsForTrip(selectedTrip.id) : [];
-    const unassignedSteps = getUnassignedSteps();
-
     return (
       <>
         <div className="min-h-screen bg-stone-100">
           <Header user={user} onSignOut={handleSignOut} />
           
           <main className="max-w-2xl mx-auto px-4 py-6">
-            {selectedTrip ? (
-              // Show selected trip's timeline
-              <>
-                <button
-                  onClick={() => setSelectedTrip(null)}
-                  className="flex items-center gap-2 text-stone-600 hover:text-stone-900 mb-6 transition"
-                >
-                  <BackIcon />
-                  <span className="font-medium">All Trips</span>
-                </button>
-                
-                <TimelineView 
-                  steps={tripSteps}
-                  trips={trips}
-                  onEditStep={handleEditStep}
-                  onDeleteStep={handleDeleteStep}
-                  onMoveToTrip={handleMoveToTrip}
-                />
-              </>
-            ) : (
-              // Show trips dashboard
-              <TripsDashboard
-                trips={trips}
-                unassignedSteps={unassignedSteps}
-                onSelectTrip={setSelectedTrip}
-                onReorganizeTrips={handleReorganizeTrips}
-                onTripsUpdated={loadUserData}
-              />
-            )}
+            <TimelineView 
+              steps={travelSteps}
+              trips={trips}
+              onEditStep={handleEditStep}
+              onDeleteStep={handleDeleteStep}
+              onMoveToTrip={handleMoveToTrip}
+            />
 
             {/* Floating Add Button */}
             <button

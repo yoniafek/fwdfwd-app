@@ -6,11 +6,9 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Use service role key for API operations (bypasses RLS)
-// This is safe because this is server-side only
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -32,28 +30,23 @@ export default async function handler(req, res) {
 
     console.log('Processing email from:', senderEmail);
 
-    // FIRST: Try to store the raw email for 30 days (non-blocking)
-    let storedEmail = null;
-    try {
-      const { data, error: storeError } = await supabase
-        .from('raw_emails')
-        .insert([{
-          sender_email: senderEmail,
-          subject: subject,
-          html_content: html,
-          text_content: text
-        }])
-        .select()
-        .single();
+    // FIRST: Store the raw email for 30 days
+    const { data: storedEmail, error: storeError } = await supabase
+      .from('raw_emails')
+      .insert([{
+        sender_email: senderEmail,
+        subject: subject,
+        html_content: html,
+        text_content: text
+      }])
+      .select()
+      .single();
 
-      if (storeError) {
-        console.error('Error storing email (non-blocking):', storeError.message);
-      } else {
-        storedEmail = data;
-        console.log('Stored raw email with ID:', storedEmail.id);
-      }
-    } catch (emailStoreError) {
-      console.error('Exception storing email (non-blocking):', emailStoreError.message);
+    if (storeError) {
+      console.error('Error storing email:', storeError);
+      // Continue processing even if storage fails
+    } else {
+      console.log('Stored raw email with ID:', storedEmail.id);
     }
 
     // Use Claude to parse the email with improved prompt
@@ -67,23 +60,11 @@ export default async function handler(req, res) {
 Email content:
 ${emailContent}
 
-CRITICAL TIMEZONE INSTRUCTIONS:
-1. ALL times must be in LOCAL TIME with timezone offset
-2. Departure time = LOCAL time at departure airport
-3. Arrival time = LOCAL time at arrival airport
-4. Use ISO 8601 format: "YYYY-MM-DDTHH:MM:SS±HH:00"
-5. Common US timezone offsets:
-   - EST/EDT (Eastern): -05:00 / -04:00
-   - CST/CDT (Central): -06:00 / -05:00
-   - MST/MDT (Mountain): -07:00 / -06:00
-   - PST/PDT (Pacific): -08:00 / -07:00
-6. If timezone is unclear, infer from airport location
-
-EXTRACTION INSTRUCTIONS:
+CRITICAL INSTRUCTIONS:
 1. Extract EXACT times from the email - do not invent or approximate
-2. For flights: extract departure AND arrival times (both in LOCAL time)
-3. Include airline + flight number in carrier_name (e.g., "United • UA 1234")
-4. Extract terminal and gate if available
+2. For flights: extract departure AND arrival times for each segment
+3. Include flight numbers in carrier_name (e.g., "United Airlines UA 1234")
+4. Use ISO 8601 format with timezone if available, or use UTC if timezone is unclear
 5. For multi-leg flights, create separate segments for EACH flight
 6. Return ONLY valid JSON with no markdown, explanations, or code blocks
 
@@ -92,17 +73,11 @@ Extract this information:
   "type": "flight" | "hotel" | "car" | "train" | "bus" | "unknown",
   "segments": [
     {
-      "start_datetime": "YYYY-MM-DDTHH:MM:SS-08:00",  // LOCAL departure time with offset
-      "end_datetime": "YYYY-MM-DDTHH:MM:SS-05:00",    // LOCAL arrival time with offset
-      "origin_name": "City Name (ABC)",               // City name with airport code OR hotel name
-      "origin_address": "123 Main St, City, State ZIP", // Full address if available
-      "origin_terminal": "3",                          // Terminal if available, null otherwise
-      "origin_gate": "A4",                             // Gate if available, null otherwise
-      "destination_name": "City Name (XYZ)",          // City name with airport code
-      "destination_address": null,                     // Full address if available
-      "destination_terminal": "A",                     // Terminal if available
-      "destination_gate": null,                        // Gate if available
-      "carrier_name": "Airline • XX 1234",            // Airline name + flight number
+      "start_datetime": "YYYY-MM-DDTHH:MM:SSZ",  // Exact departure/check-in time
+      "end_datetime": "YYYY-MM-DDTHH:MM:SSZ",    // Exact arrival/check-out time (REQUIRED for flights)
+      "origin_name": "City/Airport Code",         // e.g., "Newark (EWR)"
+      "destination_name": "City/Airport Code",    // e.g., "Los Angeles (LAX)"
+      "carrier_name": "Airline/Hotel with Number", // e.g., "United Airlines UA 1234"
       "confirmation_number": "XXXXXX"
     }
   ]
@@ -110,40 +85,25 @@ Extract this information:
 
 EXAMPLES:
 
-Flight from SFO to EWR (PST to EST):
+Flight with layover:
 {
   "type": "flight",
   "segments": [
     {
-      "start_datetime": "2025-11-19T13:00:00-08:00",
-      "end_datetime": "2025-11-19T21:29:00-05:00",
-      "origin_name": "San Francisco (SFO)",
-      "origin_terminal": "3",
-      "origin_gate": "A4",
-      "destination_name": "Newark (EWR)",
-      "destination_terminal": "A",
-      "destination_gate": "5",
-      "carrier_name": "United • UA 2011",
-      "confirmation_number": "ABC123"
-    }
-  ]
-}
-
-Return flight from EWR to SFO (EST to PST):
-{
-  "type": "flight",
-  "segments": [
-    {
-      "start_datetime": "2025-12-02T18:10:00-05:00",
-      "end_datetime": "2025-12-02T21:50:00-08:00",
+      "start_datetime": "2025-12-15T08:00:00-05:00",
+      "end_datetime": "2025-12-15T11:30:00-06:00",
       "origin_name": "Newark (EWR)",
-      "origin_terminal": "A",
-      "origin_gate": null,
-      "destination_name": "San Francisco (SFO)",
-      "destination_terminal": "3",
-      "destination_gate": null,
-      "carrier_name": "Alaska • AS 293",
-      "confirmation_number": "XYZ789"
+      "destination_name": "Chicago (ORD)",
+      "carrier_name": "United Airlines UA 1234",
+      "confirmation_number": "ABC123"
+    },
+    {
+      "start_datetime": "2025-12-15T14:00:00-06:00",
+      "end_datetime": "2025-12-15T16:45:00-08:00",
+      "origin_name": "Chicago (ORD)",
+      "destination_name": "Los Angeles (LAX)",
+      "carrier_name": "United Airlines UA 5678",
+      "confirmation_number": "ABC123"
     }
   ]
 }
@@ -153,18 +113,12 @@ Hotel:
   "type": "hotel",
   "segments": [
     {
-      "start_datetime": "2025-11-20T15:00:00-05:00",
-      "end_datetime": "2025-11-27T11:00:00-05:00",
-      "origin_name": "Aloft New York Brooklyn",
-      "origin_address": "216 Duffield St, Brooklyn, NY 11201",
-      "origin_terminal": null,
-      "origin_gate": null,
+      "start_datetime": "2025-12-20T15:00:00-05:00",
+      "end_datetime": "2025-12-23T11:00:00-05:00",
+      "origin_name": "Marriott Downtown NYC",
       "destination_name": null,
-      "destination_address": null,
-      "destination_terminal": null,
-      "destination_gate": null,
       "carrier_name": "Marriott",
-      "confirmation_number": "12345678"
+      "confirmation_number": "XYZ789"
     }
   ]
 }
@@ -186,6 +140,7 @@ If you cannot extract valid booking details with confidence, return:
       } else {
         console.error('Failed to parse Claude response:', responseText);
         
+        // Update stored email with error
         if (storedEmail) {
           await supabase
             .from('raw_emails')
@@ -288,177 +243,51 @@ If you cannot extract valid booking details with confidence, return:
       });
     }
 
-    // Find or create a trip for these segments
-    let tripId = null;
-    let tripName = null;
-    const firstSegment = parsed.segments[0];
-    const MAX_GAP_DAYS = 3;
-
-    // Fetch existing trips for this user
-    const { data: existingTrips } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('user_id', userId)
-      .order('start_date', { ascending: true });
-
-    if (existingTrips && existingTrips.length > 0) {
-      // Try to find a matching existing trip (within MAX_GAP_DAYS of step date)
-      const stepDate = new Date(firstSegment.start_datetime);
-      
-      for (const trip of existingTrips) {
-        const tripStart = new Date(trip.start_date);
-        const tripEnd = new Date(trip.end_date);
-        
-        const bufferStart = new Date(tripStart);
-        bufferStart.setDate(bufferStart.getDate() - MAX_GAP_DAYS);
-        
-        const bufferEnd = new Date(tripEnd);
-        bufferEnd.setDate(bufferEnd.getDate() + MAX_GAP_DAYS);
-        
-        if (stepDate >= bufferStart && stepDate <= bufferEnd) {
-          tripId = trip.id;
-          tripName = trip.name;
-          console.log('Matched to existing trip:', tripName);
-          break;
-        }
-      }
-    }
-
-    // If no matching trip, create a new one
-    if (!tripId) {
-      // Generate trip name from destinations
-      const locations = parsed.segments
-        .map(s => s.destination_name || s.origin_name)
-        .filter(Boolean);
-      
-      const cleanLocation = locations[0]?.replace(/\s*\([^)]*\)\s*/g, '').trim() || 'Unknown';
-      const newTripName = `Trip to ${cleanLocation}`;
-      
-      const firstSeg = parsed.segments[0];
-      const lastSeg = parsed.segments[parsed.segments.length - 1];
-      
-      const { data: newTrip, error: tripError } = await supabase
-        .from('trips')
-        .insert([{
-          user_id: userId,
-          name: newTripName,
-          start_date: firstSeg.start_datetime,
-          end_date: lastSeg.end_datetime || lastSeg.start_datetime
-        }])
-        .select()
-        .single();
-
-      if (!tripError && newTrip) {
-        tripId = newTrip.id;
-        tripName = newTripName;
-        console.log('Created new trip:', tripName);
-      } else {
-        console.error('Error creating trip:', tripError);
-        // Continue without trip assignment
-      }
-    }
-
-    // Add segments to timeline with all extracted fields
+    // Add segments to timeline
     const travelSteps = parsed.segments.map(segment => ({
       user_id: userId,
-      trip_id: tripId,
       type: parsed.type,
       start_datetime: segment.start_datetime,
       end_datetime: segment.end_datetime,
       origin_name: segment.origin_name,
-      origin_address: segment.origin_address || null,
-      origin_terminal: segment.origin_terminal || null,
-      origin_gate: segment.origin_gate || null,
       destination_name: segment.destination_name,
-      destination_address: segment.destination_address || null,
-      destination_terminal: segment.destination_terminal || null,
-      destination_gate: segment.destination_gate || null,
       carrier_name: segment.carrier_name,
       confirmation_number: segment.confirmation_number
     }));
 
     console.log('Inserting', travelSteps.length, 'travel steps');
-    console.log('Travel steps to insert:', JSON.stringify(travelSteps, null, 2));
 
-    // Check for duplicates before inserting
-    const duplicateChecks = await Promise.all(
-      travelSteps.map(async (step) => {
-        const { data: existing } = await supabase
-          .from('travel_steps')
-          .select('id')
-          .eq('user_id', step.user_id)
-          .eq('type', step.type)
-          .eq('start_datetime', step.start_datetime)
-          .eq('origin_name', step.origin_name)
-          .limit(1);
-        
-        return { step, isDuplicate: existing && existing.length > 0 };
-      })
-    );
-
-    const newSteps = duplicateChecks
-      .filter(({ isDuplicate }) => !isDuplicate)
-      .map(({ step }) => step);
-
-    const duplicateCount = travelSteps.length - newSteps.length;
-    
-    if (duplicateCount > 0) {
-      console.log(`Skipping ${duplicateCount} duplicate step(s)`);
-    }
-
-    if (newSteps.length === 0) {
-      console.log('All steps are duplicates - nothing to insert');
-      
-      await resend.emails.send({
-        from: 'FWD <add@fwdfwd.com>',
-        to: senderEmail,
-        subject: `Already in Your Timeline`,
-        html: `
-          <p>Hi!</p>
-          
-          <p>We received your email, but this ${parsed.type} is already in your timeline.</p>
-          
-          <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Timeline</a></p>
-          
-          <p>Thanks,<br>The FWD Team</p>
-        `
-      });
-
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Duplicate - already exists',
-        segmentsAdded: 0
-      });
-    }
-
-    const { data: insertedData, error: insertError } = await supabase
+    const { error: insertError } = await supabase
       .from('travel_steps')
-      .insert(newSteps)
-      .select();
+      .insert(travelSteps);
 
     if (insertError) {
       console.error('Error inserting travel steps:', insertError);
-      console.error('Insert error details:', JSON.stringify(insertError, null, 2));
       return res.status(500).json({ error: 'Database error', details: insertError.message });
     }
 
-    console.log('Successfully added travel steps:', insertedData?.length || newSteps.length);
+    console.log('Successfully added travel steps');
 
-    // Format segments for confirmation email
+    // Format segments for email
     const segmentDescriptions = parsed.segments.map(seg => {
       if (parsed.type === 'flight') {
-        // Extract time from ISO string for display
-        const deptTime = formatTimeFromISO(seg.start_datetime);
-        const arrTime = formatTimeFromISO(seg.end_datetime);
-        const deptDate = formatDateFromISO(seg.start_datetime);
-        
-        return `<strong>${seg.carrier_name}</strong><br>
-${seg.origin_name} → ${seg.destination_name}<br>
-${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
+        const dept = new Date(seg.start_datetime).toLocaleString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric', 
+          hour: 'numeric', minute: '2-digit', timeZoneName: 'short' 
+        });
+        const arr = seg.end_datetime ? new Date(seg.end_datetime).toLocaleString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric', 
+          hour: 'numeric', minute: '2-digit', timeZoneName: 'short' 
+        }) : 'TBD';
+        return `${seg.carrier_name}: ${seg.origin_name} → ${seg.destination_name}<br>Departs: ${dept}<br>Arrives: ${arr}`;
       } else if (parsed.type === 'hotel') {
-        const checkin = formatDateFromISO(seg.start_datetime);
-        const checkout = formatDateFromISO(seg.end_datetime);
-        return `<strong>${seg.origin_name}</strong><br>Check-in: ${checkin}<br>Check-out: ${checkout}`;
+        const checkin = new Date(seg.start_datetime).toLocaleDateString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric' 
+        });
+        const checkout = seg.end_datetime ? new Date(seg.end_datetime).toLocaleDateString('en-US', { 
+          weekday: 'short', month: 'short', day: 'numeric' 
+        }) : 'TBD';
+        return `${seg.origin_name}<br>Check-in: ${checkin}<br>Check-out: ${checkout}`;
       }
       return `${seg.origin_name} → ${seg.destination_name || ''}`;
     }).join('<br><br>');
@@ -466,18 +295,18 @@ ${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
     await resend.emails.send({
       from: 'FWD <add@fwdfwd.com>',
       to: senderEmail,
-      subject: `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added${tripName ? ` to ${tripName}` : ''}`,
+      subject: `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added`,
       html: `
         <p>Hi!</p>
         
-        <p>Your ${parsed.type} has been added to ${tripName ? `<strong>${tripName}</strong>` : 'your travel timeline'}.</p>
+        <p>Your ${parsed.type} has been added to your travel timeline.</p>
         
         <p><strong>Details:</strong></p>
         <p>${segmentDescriptions}</p>
         
-        ${newSteps.length > 1 ? `<p><em>Added ${newSteps.length} segments to your journey</em></p>` : ''}
+        ${parsed.segments.length > 1 ? `<p><em>Added ${parsed.segments.length} segments to your journey</em></p>` : ''}
         
-        <p><a href="https://fwdfwd.com" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Trip</a></p>
+        <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #000; color: #fff; text-decoration: none; border-radius: 6px; margin-top: 16px;">View Your Timeline</a></p>
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">Keep forwarding your confirmations to <strong>add@fwdfwd.com</strong> to build your timeline!</p>
         
@@ -488,39 +317,11 @@ ${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
     return res.status(200).json({ 
       success: true, 
       message: 'Email processed and confirmation sent',
-      segmentsAdded: newSteps.length,
-      duplicatesSkipped: duplicateCount
+      segmentsAdded: parsed.segments.length
     });
 
   } catch (error) {
     console.error('Error processing email:', error);
     return res.status(500).json({ error: 'Internal server error', details: error.message });
   }
-}
-
-// Helper to format time from ISO string without timezone conversion
-function formatTimeFromISO(isoString) {
-  if (!isoString) return 'TBD';
-  const match = isoString.match(/T(\d{2}):(\d{2})/);
-  if (match) {
-    let hours = parseInt(match[1], 10);
-    const minutes = match[2];
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    return `${hours}:${minutes} ${ampm}`;
-  }
-  return 'TBD';
-}
-
-// Helper to format date from ISO string
-function formatDateFromISO(isoString) {
-  if (!isoString) return 'TBD';
-  const match = isoString.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (match) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const date = new Date(match[1], parseInt(match[2]) - 1, match[3]);
-    return `${days[date.getDay()]} ${months[date.getMonth()]} ${parseInt(match[3])}`;
-  }
-  return 'TBD';
 }
