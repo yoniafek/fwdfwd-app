@@ -288,9 +288,80 @@ If you cannot extract valid booking details with confidence, return:
       });
     }
 
+    // Find or create a trip for these segments
+    let tripId = null;
+    let tripName = null;
+    const firstSegment = parsed.segments[0];
+    const MAX_GAP_DAYS = 3;
+
+    // Fetch existing trips for this user
+    const { data: existingTrips } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('user_id', userId)
+      .order('start_date', { ascending: true });
+
+    if (existingTrips && existingTrips.length > 0) {
+      // Try to find a matching existing trip (within MAX_GAP_DAYS of step date)
+      const stepDate = new Date(firstSegment.start_datetime);
+      
+      for (const trip of existingTrips) {
+        const tripStart = new Date(trip.start_date);
+        const tripEnd = new Date(trip.end_date);
+        
+        const bufferStart = new Date(tripStart);
+        bufferStart.setDate(bufferStart.getDate() - MAX_GAP_DAYS);
+        
+        const bufferEnd = new Date(tripEnd);
+        bufferEnd.setDate(bufferEnd.getDate() + MAX_GAP_DAYS);
+        
+        if (stepDate >= bufferStart && stepDate <= bufferEnd) {
+          tripId = trip.id;
+          tripName = trip.name;
+          console.log('Matched to existing trip:', tripName);
+          break;
+        }
+      }
+    }
+
+    // If no matching trip, create a new one
+    if (!tripId) {
+      // Generate trip name from destinations
+      const locations = parsed.segments
+        .map(s => s.destination_name || s.origin_name)
+        .filter(Boolean);
+      
+      const cleanLocation = locations[0]?.replace(/\s*\([^)]*\)\s*/g, '').trim() || 'Unknown';
+      const newTripName = `Trip to ${cleanLocation}`;
+      
+      const firstSeg = parsed.segments[0];
+      const lastSeg = parsed.segments[parsed.segments.length - 1];
+      
+      const { data: newTrip, error: tripError } = await supabase
+        .from('trips')
+        .insert([{
+          user_id: userId,
+          name: newTripName,
+          start_date: firstSeg.start_datetime,
+          end_date: lastSeg.end_datetime || lastSeg.start_datetime
+        }])
+        .select()
+        .single();
+
+      if (!tripError && newTrip) {
+        tripId = newTrip.id;
+        tripName = newTripName;
+        console.log('Created new trip:', tripName);
+      } else {
+        console.error('Error creating trip:', tripError);
+        // Continue without trip assignment
+      }
+    }
+
     // Add segments to timeline with all extracted fields
     const travelSteps = parsed.segments.map(segment => ({
       user_id: userId,
+      trip_id: tripId,
       type: parsed.type,
       start_datetime: segment.start_datetime,
       end_datetime: segment.end_datetime,
@@ -395,18 +466,18 @@ ${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
     await resend.emails.send({
       from: 'FWD <add@fwdfwd.com>',
       to: senderEmail,
-      subject: `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added`,
+      subject: `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added${tripName ? ` to ${tripName}` : ''}`,
       html: `
         <p>Hi!</p>
         
-        <p>Your ${parsed.type} has been added to your travel timeline.</p>
+        <p>Your ${parsed.type} has been added to ${tripName ? `<strong>${tripName}</strong>` : 'your travel timeline'}.</p>
         
         <p><strong>Details:</strong></p>
         <p>${segmentDescriptions}</p>
         
         ${newSteps.length > 1 ? `<p><em>Added ${newSteps.length} segments to your journey</em></p>` : ''}
         
-        <p><a href="https://fwdfwd.com/app" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Timeline</a></p>
+        <p><a href="https://fwdfwd.com" style="display: inline-block; padding: 12px 24px; background-color: #1c1917; color: #fff; text-decoration: none; border-radius: 8px; margin-top: 16px; font-weight: 600;">View Your Trip</a></p>
         
         <p style="margin-top: 24px; font-size: 14px; color: #666;">Keep forwarding your confirmations to <strong>add@fwdfwd.com</strong> to build your timeline!</p>
         
