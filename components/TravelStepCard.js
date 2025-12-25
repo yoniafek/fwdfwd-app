@@ -318,7 +318,8 @@ export default function TravelStepCard({
 // Flight card with connected departure/arrival
 function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView, showMenu, setShowMenu }) {
   const startTime = formatTimeRaw(step.start_datetime);
-  const endTime = step.end_datetime ? formatTimeRaw(step.end_datetime) : null;
+  const dayDiff = calculateDayDifference(step.start_datetime, step.end_datetime);
+  const endTime = step.end_datetime ? formatTimeWithDayOffset(step.end_datetime, dayDiff) : null;
   
   const { name: originName, code: originCode } = parseLocationWithCode(step.origin_name);
   const { name: destName, code: destCode } = parseLocationWithCode(step.destination_name);
@@ -705,6 +706,38 @@ function extractTimezoneOffset(datetimeStr) {
   }
   
   return null;
+}
+
+// Calculate how many days later the arrival is compared to departure
+function calculateDayDifference(startDatetime, endDatetime) {
+  if (!startDatetime || !endDatetime) return 0;
+  
+  // Extract just the date portion (YYYY-MM-DD) from both datetimes
+  const startDate = startDatetime.split('T')[0];
+  const endDate = endDatetime.split('T')[0];
+  
+  if (!startDate || !endDate) return 0;
+  
+  // Calculate difference in days
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const diffMs = end - start;
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  
+  return diffDays;
+}
+
+// Format time with optional +N day indicator
+function formatTimeWithDayOffset(datetime, dayOffset) {
+  const time = formatTimeRaw(datetime);
+  if (!time) return '–';
+  
+  if (dayOffset > 0) {
+    const superscript = dayOffset === 1 ? '⁺¹' : dayOffset === 2 ? '⁺²' : `⁺${dayOffset}`;
+    return `${time}${superscript}`;
+  }
+  
+  return time;
 }
 
 function detectIfHotel(name, address) {
