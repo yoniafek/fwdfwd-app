@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { FlightIcon, HotelIcon, CarIcon, ChevronIcon, CircleIcon } from '../components/Icons';
 import { getSupabase, getCurrentUser, onAuthStateChange } from '../lib/supabase';
 import { fetchTravelSteps } from '../lib/travelSteps';
-import { fetchTrips, updateTrip, deleteTrip } from '../lib/trips';
+import { fetchTrips, updateTrip, deleteTrip, updateTripNameFromSteps } from '../lib/trips';
 import TimelineView from '../components/TimelineView';
 import TripsDashboard from '../components/TripsDashboard';
 import Header from '../components/Header';
@@ -36,8 +36,6 @@ export default function HomePage() {
   
   // Navigation state: 'dashboard' or { tripId: string, tripName: string }
   const [currentView, setCurrentView] = useState('dashboard');
-  const [renamingTrip, setRenamingTrip] = useState(null);
-  const [newTripName, setNewTripName] = useState('');
 
   // Check for Google Maps
   useEffect(() => {
@@ -174,24 +172,37 @@ export default function HomePage() {
 
   async function handleMoveToTrip(stepId, tripId) {
     if (tripId === null) {
+      // Create a new trip for this step
       const step = travelSteps.find(s => s.id === stepId);
       if (!step) return;
       try {
+        // Create trip with placeholder name (will be updated immediately)
         const newTrip = await createTrip(user.id, {
-          name: `Trip - ${new Date(step.start_datetime).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}`,
+          name: 'New Trip',
           start_date: step.start_datetime.split('T')[0],
           destination: step.destination_name || step.origin_name
         });
         await moveTravelStepToTrip(stepId, newTrip.id);
-        setTrips(prev => [...prev, newTrip]);
+        
+        // Auto-update the trip name based on its new contents
+        const updatedTrip = await updateTripNameFromSteps(newTrip.id);
+        
+        setTrips(prev => [...prev, updatedTrip || newTrip]);
         setTravelSteps(prev => prev.map(s => s.id === stepId ? { ...s, trip_id: newTrip.id } : s));
       } catch (error) {
         console.error('Error creating trip:', error);
       }
     } else {
+      // Move to existing trip
       try {
         await moveTravelStepToTrip(stepId, tripId);
         setTravelSteps(prev => prev.map(s => s.id === stepId ? { ...s, trip_id: tripId } : s));
+        
+        // Auto-update the trip name based on its new contents
+        const updatedTrip = await updateTripNameFromSteps(tripId);
+        if (updatedTrip) {
+          setTrips(prev => prev.map(t => t.id === tripId ? { ...t, name: updatedTrip.name } : t));
+        }
       } catch (error) {
         console.error('Error moving step:', error);
       }
@@ -218,24 +229,6 @@ export default function HomePage() {
   }
 
   // Trip management handlers
-  async function handleRenameTrip(trip) {
-    setRenamingTrip(trip);
-    setNewTripName(trip.name || '');
-  }
-
-  async function handleSaveRename() {
-    if (!renamingTrip || !newTripName.trim()) return;
-    try {
-      const updated = await updateTrip(renamingTrip.id, { name: newTripName.trim() });
-      setTrips(prev => prev.map(t => t.id === updated.id ? { ...t, name: updated.name } : t));
-      setRenamingTrip(null);
-      setNewTripName('');
-    } catch (error) {
-      console.error('Error renaming trip:', error);
-      alert('Error renaming trip: ' + error.message);
-    }
-  }
-
   async function handleDeleteTrip(trip) {
     if (!confirm(`Delete "${trip.name || 'this trip'}"? The travel steps will be kept but unassigned.`)) return;
     try {
@@ -321,7 +314,6 @@ export default function HomePage() {
                 trips={trips}
                 ungroupedSteps={ungroupedSteps}
                 onSelectTrip={handleSelectTrip}
-                onRenameTrip={handleRenameTrip}
                 onDeleteTrip={handleDeleteTrip}
                 onShareTrip={handleShareTrip}
               />
@@ -358,40 +350,6 @@ export default function HomePage() {
             />
           )}
 
-          {/* Rename Trip Modal */}
-          {renamingTrip && (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
-                <h2 className="text-xl font-semibold text-stone-900 mb-4">Rename Trip</h2>
-                <input
-                  type="text"
-                  value={newTripName}
-                  onChange={(e) => setNewTripName(e.target.value)}
-                  className="w-full px-4 py-3 border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900 focus:border-transparent"
-                  placeholder="Trip name"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveRename();
-                    if (e.key === 'Escape') setRenamingTrip(null);
-                  }}
-                />
-                <div className="flex justify-end gap-3 mt-6">
-                  <button
-                    onClick={() => setRenamingTrip(null)}
-                    className="px-4 py-2 text-stone-600 hover:text-stone-900 font-medium"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleSaveRename}
-                    className="px-6 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 font-medium"
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </>
     );

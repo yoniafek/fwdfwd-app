@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { FlightIcon, HotelIcon, CarIcon, ChevronIcon, MoreIcon, EditIcon, TrashIcon, ShareIcon } from './Icons';
+import { FlightIcon, HotelIcon, CarIcon, ChevronIcon, MoreIcon, TrashIcon, ShareIcon } from './Icons';
 
 // Trip card component
-function TripCard({ trip, onSelect, onRename, onDelete, onShare }) {
+function TripCard({ trip, onSelect, onDelete, onShare }) {
   const [showMenu, setShowMenu] = useState(false);
   
   // Calculate trip stats
@@ -75,17 +75,6 @@ function TripCard({ trip, onSelect, onRename, onDelete, onShare }) {
                 }} 
               />
               <div className="absolute right-0 top-full mt-1 bg-white rounded-lg border border-stone-200 shadow-lg py-1 z-20 min-w-[140px]">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onRename?.(trip);
-                  }}
-                  className="w-full px-4 py-2 text-left text-sm text-stone-700 hover:bg-stone-100 flex items-center gap-2"
-                >
-                  <EditIcon />
-                  Rename
-                </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -228,7 +217,6 @@ export default function TripsDashboard({
   trips = [], 
   ungroupedSteps = [],
   onSelectTrip,
-  onRenameTrip,
   onDeleteTrip,
   onShareTrip,
   onSelectUngroupedStep
@@ -269,7 +257,6 @@ export default function TripsDashboard({
                 key={trip.id}
                 trip={trip}
                 onSelect={onSelectTrip}
-                onRename={onRenameTrip}
                 onDelete={onDeleteTrip}
                 onShare={onShareTrip}
               />
@@ -298,7 +285,6 @@ export default function TripsDashboard({
                 key={trip.id}
                 trip={trip}
                 onSelect={onSelectTrip}
-                onRename={onRenameTrip}
                 onDelete={onDeleteTrip}
                 onShare={onShareTrip}
               />
