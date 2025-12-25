@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { FlightIcon, HotelIcon, CarIcon, ChevronIcon, CircleIcon } from '../components/Icons';
 import { getSupabase, getCurrentUser, onAuthStateChange } from '../lib/supabase';
 import { fetchTravelSteps } from '../lib/travelSteps';
-import { fetchTrips } from '../lib/trips';
+import { fetchTrips, updateTrip, deleteTrip } from '../lib/trips';
 import TimelineView from '../components/TimelineView';
+import TripsDashboard from '../components/TripsDashboard';
 import Header from '../components/Header';
 import AuthModal from '../components/AuthModal';
 import AddEditStepModal from '../components/AddEditStepModal';
@@ -32,6 +33,11 @@ export default function HomePage() {
   const [editingStep, setEditingStep] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [googleMapsLoaded, setGoogleMapsLoaded] = useState(false);
+  
+  // Navigation state: 'dashboard' or { tripId: string, tripName: string }
+  const [currentView, setCurrentView] = useState('dashboard');
+  const [renamingTrip, setRenamingTrip] = useState(null);
+  const [newTripName, setNewTripName] = useState('');
 
   // Check for Google Maps
   useEffect(() => {
@@ -202,6 +208,66 @@ export default function HomePage() {
     setEditingStep(null);
   }
 
+  // Trip navigation handlers
+  function handleSelectTrip(trip) {
+    setCurrentView({ tripId: trip.id, tripName: trip.name });
+  }
+
+  function handleBackToDashboard() {
+    setCurrentView('dashboard');
+  }
+
+  // Trip management handlers
+  async function handleRenameTrip(trip) {
+    setRenamingTrip(trip);
+    setNewTripName(trip.name || '');
+  }
+
+  async function handleSaveRename() {
+    if (!renamingTrip || !newTripName.trim()) return;
+    try {
+      const updated = await updateTrip(renamingTrip.id, { name: newTripName.trim() });
+      setTrips(prev => prev.map(t => t.id === updated.id ? { ...t, name: updated.name } : t));
+      setRenamingTrip(null);
+      setNewTripName('');
+    } catch (error) {
+      console.error('Error renaming trip:', error);
+      alert('Error renaming trip: ' + error.message);
+    }
+  }
+
+  async function handleDeleteTrip(trip) {
+    if (!confirm(`Delete "${trip.name || 'this trip'}"? The travel steps will be kept but unassigned.`)) return;
+    try {
+      await deleteTrip(trip.id);
+      setTrips(prev => prev.filter(t => t.id !== trip.id));
+      // Unassign steps locally
+      setTravelSteps(prev => prev.map(s => s.trip_id === trip.id ? { ...s, trip_id: null } : s));
+      // If viewing this trip, go back to dashboard
+      if (currentView.tripId === trip.id) {
+        setCurrentView('dashboard');
+      }
+    } catch (error) {
+      console.error('Error deleting trip:', error);
+      alert('Error deleting trip: ' + error.message);
+    }
+  }
+
+  function handleShareTrip(trip) {
+    // TODO: Implement share modal
+    const shareUrl = `${window.location.origin}/trip/${trip.share_token}`;
+    navigator.clipboard.writeText(shareUrl);
+    alert('Share link copied to clipboard!');
+  }
+
+  // Get ungrouped steps (no trip_id)
+  const ungroupedSteps = travelSteps.filter(s => !s.trip_id);
+
+  // Get steps for current trip view
+  const currentTripSteps = currentView !== 'dashboard' 
+    ? travelSteps.filter(s => s.trip_id === currentView.tripId)
+    : [];
+
   // Loading state
   if (loading) {
     return (
@@ -214,21 +280,63 @@ export default function HomePage() {
     );
   }
 
-  // LOGGED IN - Show Timeline
+  // LOGGED IN - Show Dashboard or Trip Detail
   if (user) {
+    const isViewingTrip = currentView !== 'dashboard';
+    
     return (
       <>
         <div className="min-h-screen bg-stone-100">
           <Header user={user} onSignOut={handleSignOut} />
           
           <main className="max-w-2xl mx-auto px-4 py-6">
-            <TimelineView 
-              steps={travelSteps}
-              trips={trips}
-              onEditStep={handleEditStep}
-              onDeleteStep={handleDeleteStep}
-              onMoveToTrip={handleMoveToTrip}
-            />
+            {/* Back button when viewing a trip */}
+            {isViewingTrip && (
+              <button
+                onClick={handleBackToDashboard}
+                className="flex items-center gap-2 text-stone-500 hover:text-stone-700 mb-4 transition-colors"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+                </svg>
+                <span className="font-medium">All Trips</span>
+              </button>
+            )}
+
+            {/* Trip header when viewing a trip */}
+            {isViewingTrip && (
+              <div className="mb-6">
+                <h1 className="text-2xl font-bold text-stone-900">
+                  {currentView.tripName || 'Trip'}
+                </h1>
+                <p className="text-stone-500">
+                  {currentTripSteps.length} item{currentTripSteps.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+            )}
+
+            {/* Dashboard view */}
+            {!isViewingTrip && (
+              <TripsDashboard
+                trips={trips}
+                ungroupedSteps={ungroupedSteps}
+                onSelectTrip={handleSelectTrip}
+                onRenameTrip={handleRenameTrip}
+                onDeleteTrip={handleDeleteTrip}
+                onShareTrip={handleShareTrip}
+              />
+            )}
+
+            {/* Trip detail view */}
+            {isViewingTrip && (
+              <TimelineView 
+                steps={currentTripSteps}
+                trips={trips}
+                onEditStep={handleEditStep}
+                onDeleteStep={handleDeleteStep}
+                onMoveToTrip={handleMoveToTrip}
+              />
+            )}
 
             {/* Floating Add Button */}
             <button
@@ -248,6 +356,41 @@ export default function HomePage() {
               onClose={closeModal}
               googleMapsLoaded={googleMapsLoaded}
             />
+          )}
+
+          {/* Rename Trip Modal */}
+          {renamingTrip && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
+                <h2 className="text-xl font-semibold text-stone-900 mb-4">Rename Trip</h2>
+                <input
+                  type="text"
+                  value={newTripName}
+                  onChange={(e) => setNewTripName(e.target.value)}
+                  className="w-full px-4 py-3 border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-900 focus:border-transparent"
+                  placeholder="Trip name"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveRename();
+                    if (e.key === 'Escape') setRenamingTrip(null);
+                  }}
+                />
+                <div className="flex justify-end gap-3 mt-6">
+                  <button
+                    onClick={() => setRenamingTrip(null)}
+                    className="px-4 py-2 text-stone-600 hover:text-stone-900 font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveRename}
+                    className="px-6 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 font-medium"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </>

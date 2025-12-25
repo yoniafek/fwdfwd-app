@@ -373,6 +373,29 @@ If you cannot extract valid booking details with confidence, return:
 
     console.log('Successfully added travel steps:', insertedData?.length || newSteps.length);
 
+    // AUTO-ASSIGN TO TRIP
+    // Fetch all user's steps to determine groupings
+    let tripName = null;
+    try {
+      const { data: allSteps } = await supabase
+        .from('travel_steps')
+        .select('*')
+        .eq('user_id', userId)
+        .order('start_datetime', { ascending: true });
+
+      if (allSteps && allSteps.length > 0) {
+        // Find or create a matching trip for the new steps
+        const tripAssignment = await findOrCreateTripForSteps(supabase, userId, insertedData, allSteps);
+        if (tripAssignment) {
+          tripName = tripAssignment.tripName;
+          console.log('Assigned steps to trip:', tripName);
+        }
+      }
+    } catch (tripError) {
+      // Non-blocking - trip assignment failure shouldn't fail the whole request
+      console.error('Error assigning trip (non-blocking):', tripError.message);
+    }
+
     // Format segments for confirmation email
     const segmentDescriptions = parsed.segments.map(seg => {
       if (parsed.type === 'flight') {
@@ -395,11 +418,13 @@ ${deptDate} • Departs ${deptTime}, Arrives ${arrTime}`;
     await resend.emails.send({
       from: 'FWD <add@fwdfwd.com>',
       to: senderEmail,
-      subject: `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added`,
+      subject: tripName 
+        ? `✅ Added to "${tripName}"`
+        : `✅ Your ${parsed.type.charAt(0).toUpperCase() + parsed.type.slice(1)} Has Been Added`,
       html: `
         <p>Hi!</p>
         
-        <p>Your ${parsed.type} has been added to your travel timeline.</p>
+        <p>Your ${parsed.type} has been added${tripName ? ` to <strong>${tripName}</strong>` : ' to your travel timeline'}.</p>
         
         <p><strong>Details:</strong></p>
         <p>${segmentDescriptions}</p>
@@ -452,4 +477,152 @@ function formatDateFromISO(isoString) {
     return `${days[date.getDay()]} ${months[date.getMonth()]} ${parseInt(match[3])}`;
   }
   return 'TBD';
+}
+
+// Generate a random share token for trips
+function generateShareToken() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let token = '';
+  for (let i = 0; i < 12; i++) {
+    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return token;
+}
+
+// Extract city name from location string (removes airport codes, addresses)
+function extractCity(locationStr) {
+  if (!locationStr) return null;
+  // Remove airport code in parentheses: "San Francisco (SFO)" -> "San Francisco"
+  let city = locationStr.replace(/\s*\([A-Z]{3}\)\s*$/, '').trim();
+  // Remove trailing airport code: "San Francisco SFO" -> "San Francisco"
+  city = city.replace(/\s+[A-Z]{3}$/, '').trim();
+  return city || null;
+}
+
+// Find or create a matching trip for newly inserted steps
+async function findOrCreateTripForSteps(supabase, userId, newSteps, allSteps) {
+  if (!newSteps || newSteps.length === 0) return null;
+
+  const MAX_GAP_DAYS = 7; // Maximum days between steps to be same trip
+  
+  // Get the first new step to determine grouping
+  const firstNewStep = newSteps[0];
+  const newStepDate = new Date(firstNewStep.start_datetime);
+  
+  // Check if new step should belong to an existing trip
+  // Look at all steps and find ones within 7 days
+  const { data: existingTrips } = await supabase
+    .from('trips')
+    .select('id, name, start_date, end_date')
+    .eq('user_id', userId);
+
+  // Check each existing trip to see if new steps fit
+  for (const trip of (existingTrips || [])) {
+    const tripStart = trip.start_date ? new Date(trip.start_date) : null;
+    const tripEnd = trip.end_date ? new Date(trip.end_date) : null;
+    
+    if (!tripStart) continue;
+    
+    // Calculate days from trip start/end
+    const daysFromStart = (newStepDate - tripStart) / (1000 * 60 * 60 * 24);
+    const daysFromEnd = tripEnd ? (newStepDate - tripEnd) / (1000 * 60 * 60 * 24) : daysFromStart;
+    
+    // If within 7 days before or after the trip, add to this trip
+    if (daysFromStart >= -MAX_GAP_DAYS && daysFromEnd <= MAX_GAP_DAYS) {
+      // Update the steps to belong to this trip
+      const stepIds = newSteps.map(s => s.id);
+      await supabase
+        .from('travel_steps')
+        .update({ trip_id: trip.id })
+        .in('id', stepIds);
+      
+      // Update trip dates if new steps extend the range
+      const updates = {};
+      const newStepEndDate = newSteps[newSteps.length - 1].end_datetime || newSteps[newSteps.length - 1].start_datetime;
+      
+      if (newStepDate < tripStart) {
+        updates.start_date = firstNewStep.start_datetime.split('T')[0];
+      }
+      if (tripEnd && new Date(newStepEndDate) > tripEnd) {
+        updates.end_date = newStepEndDate.split('T')[0];
+      }
+      
+      if (Object.keys(updates).length > 0) {
+        await supabase
+          .from('trips')
+          .update(updates)
+          .eq('id', trip.id);
+      }
+      
+      return { tripId: trip.id, tripName: trip.name };
+    }
+  }
+  
+  // No matching trip found - create a new one
+  const tripName = generateTripName(newSteps);
+  const startDate = firstNewStep.start_datetime.split('T')[0];
+  const lastStep = newSteps[newSteps.length - 1];
+  const endDate = (lastStep.end_datetime || lastStep.start_datetime).split('T')[0];
+  
+  const { data: newTrip, error: createError } = await supabase
+    .from('trips')
+    .insert([{
+      user_id: userId,
+      name: tripName,
+      start_date: startDate,
+      end_date: endDate,
+      share_token: generateShareToken()
+    }])
+    .select()
+    .single();
+  
+  if (createError) {
+    console.error('Error creating trip:', createError);
+    return null;
+  }
+  
+  // Assign new steps to the trip
+  const stepIds = newSteps.map(s => s.id);
+  await supabase
+    .from('travel_steps')
+    .update({ trip_id: newTrip.id })
+    .in('id', stepIds);
+  
+  return { tripId: newTrip.id, tripName: newTrip.name };
+}
+
+// Generate a trip name based on destinations
+function generateTripName(steps) {
+  // Get unique destinations
+  const destinations = new Set();
+  
+  for (const step of steps) {
+    if (step.type === 'flight' && step.destination_name) {
+      const city = extractCity(step.destination_name);
+      if (city) destinations.add(city);
+    } else if (step.type === 'hotel' && step.origin_name) {
+      // For hotels, try to extract city from address or name
+      const city = extractCity(step.origin_name);
+      if (city) destinations.add(city);
+    }
+  }
+  
+  const destArray = Array.from(destinations);
+  const startDate = new Date(steps[0].start_datetime);
+  const month = startDate.toLocaleString('en-US', { month: 'short' });
+  const year = startDate.getFullYear().toString().slice(-2);
+  
+  if (destArray.length === 0) {
+    return `Trip - ${month} '${year}`;
+  }
+  
+  if (destArray.length === 1) {
+    return `${destArray[0]} - ${month} '${year}`;
+  }
+  
+  if (destArray.length === 2) {
+    return `${destArray[0]} & ${destArray[1]} - ${month} '${year}`;
+  }
+  
+  return `${destArray[0]} + ${destArray.length - 1} more - ${month} '${year}`;
 }
