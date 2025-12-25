@@ -479,25 +479,8 @@ function formatDateFromISO(isoString) {
   return 'TBD';
 }
 
-// Generate a random share token for trips
-function generateShareToken() {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let token = '';
-  for (let i = 0; i < 12; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return token;
-}
-
-// Extract city name from location string (removes airport codes, addresses)
-function extractCity(locationStr) {
-  if (!locationStr) return null;
-  // Remove airport code in parentheses: "San Francisco (SFO)" -> "San Francisco"
-  let city = locationStr.replace(/\s*\([A-Z]{3}\)\s*$/, '').trim();
-  // Remove trailing airport code: "San Francisco SFO" -> "San Francisco"
-  city = city.replace(/\s+[A-Z]{3}$/, '').trim();
-  return city || null;
-}
+// Import shared trip utilities from lib/trips.js
+import { generateShareToken, extractCity, extractState, generateTripName } from '../../lib/trips';
 
 // Find or create a matching trip for newly inserted steps
 async function findOrCreateTripForSteps(supabase, userId, newSteps, allSteps) {
@@ -509,26 +492,45 @@ async function findOrCreateTripForSteps(supabase, userId, newSteps, allSteps) {
   const firstNewStep = newSteps[0];
   const newStepDate = new Date(firstNewStep.start_datetime);
   
+  // For return flight detection: check if this flight returns to an existing trip's origin
+  const isReturnFlight = (step, tripSteps) => {
+    if (step.type !== 'flight') return false;
+    const stepDestCity = extractCity(step.destination_name);
+    if (!stepDestCity) return false;
+    
+    // Find the first outbound flight in the trip
+    const firstFlight = tripSteps.find(s => s.type === 'flight');
+    if (!firstFlight) return false;
+    
+    const tripOrigin = extractCity(firstFlight.origin_name);
+    return tripOrigin && stepDestCity === tripOrigin;
+  };
+  
   // Check if new step should belong to an existing trip
-  // Look at all steps and find ones within 7 days
   const { data: existingTrips } = await supabase
     .from('trips')
     .select('id, name, start_date, end_date')
     .eq('user_id', userId);
 
-  // Check each existing trip to see if new steps fit
+  // Also fetch steps for each trip to check return flights
   for (const trip of (existingTrips || [])) {
     const tripStart = trip.start_date ? new Date(trip.start_date) : null;
     const tripEnd = trip.end_date ? new Date(trip.end_date) : null;
     
     if (!tripStart) continue;
     
+    // Get steps for this trip to check return flight
+    const tripSteps = allSteps.filter(s => s.trip_id === trip.id);
+    
     // Calculate days from trip start/end
     const daysFromStart = (newStepDate - tripStart) / (1000 * 60 * 60 * 24);
     const daysFromEnd = tripEnd ? (newStepDate - tripEnd) / (1000 * 60 * 60 * 24) : daysFromStart;
     
-    // If within 7 days before or after the trip, add to this trip
-    if (daysFromStart >= -MAX_GAP_DAYS && daysFromEnd <= MAX_GAP_DAYS) {
+    // Check if this is a return flight for the trip
+    const returnsToTripOrigin = isReturnFlight(firstNewStep, tripSteps);
+    
+    // If within 7 days OR is a return flight, add to this trip
+    if ((daysFromStart >= -MAX_GAP_DAYS && daysFromEnd <= MAX_GAP_DAYS) || returnsToTripOrigin) {
       // Update the steps to belong to this trip
       const stepIds = newSteps.map(s => s.id);
       await supabase
@@ -554,7 +556,17 @@ async function findOrCreateTripForSteps(supabase, userId, newSteps, allSteps) {
           .eq('id', trip.id);
       }
       
-      return { tripId: trip.id, tripName: trip.name };
+      // Re-generate trip name with all steps including new ones
+      const allTripSteps = [...tripSteps, ...newSteps];
+      const newTripName = generateTripName(allTripSteps);
+      if (newTripName !== trip.name) {
+        await supabase
+          .from('trips')
+          .update({ name: newTripName })
+          .eq('id', trip.id);
+      }
+      
+      return { tripId: trip.id, tripName: newTripName };
     }
   }
   
@@ -589,40 +601,4 @@ async function findOrCreateTripForSteps(supabase, userId, newSteps, allSteps) {
     .in('id', stepIds);
   
   return { tripId: newTrip.id, tripName: newTrip.name };
-}
-
-// Generate a trip name based on destinations
-function generateTripName(steps) {
-  // Get unique destinations
-  const destinations = new Set();
-  
-  for (const step of steps) {
-    if (step.type === 'flight' && step.destination_name) {
-      const city = extractCity(step.destination_name);
-      if (city) destinations.add(city);
-    } else if (step.type === 'hotel' && step.origin_name) {
-      // For hotels, try to extract city from address or name
-      const city = extractCity(step.origin_name);
-      if (city) destinations.add(city);
-    }
-  }
-  
-  const destArray = Array.from(destinations);
-  const startDate = new Date(steps[0].start_datetime);
-  const month = startDate.toLocaleString('en-US', { month: 'short' });
-  const year = startDate.getFullYear().toString().slice(-2);
-  
-  if (destArray.length === 0) {
-    return `Trip - ${month} '${year}`;
-  }
-  
-  if (destArray.length === 1) {
-    return `${destArray[0]} - ${month} '${year}`;
-  }
-  
-  if (destArray.length === 2) {
-    return `${destArray[0]} & ${destArray[1]} - ${month} '${year}`;
-  }
-  
-  return `${destArray[0]} + ${destArray.length - 1} more - ${month} '${year}`;
 }
