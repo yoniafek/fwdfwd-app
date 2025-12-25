@@ -327,7 +327,7 @@ function FlightCard({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
   const { duration, timezoneOffset } = calculateFlightDuration(step.start_datetime, step.end_datetime);
 
   return (
-    <div className="bg-stone-50 rounded-xl border border-stone-200 group relative hover:border-stone-300 transition overflow-hidden">
+    <div className="bg-stone-50 rounded-xl border border-stone-200 group relative hover:border-stone-300 transition">
       <ActionMenu 
         step={step}
         onEdit={onEdit}
