@@ -20,18 +20,16 @@ export default async function handler(req, res) {
   try {
     console.log('Starting reparse for user:', userEmail);
 
-    // Find the user by email
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', userEmail)
-      .single();
+    // Find the user by email using the RPC function
+    const { data: userId, error: rpcError } = await supabase.rpc('get_user_id_by_email', {
+      user_email: userEmail
+    });
 
-    if (userError || !user) {
-      return res.status(404).json({ error: 'User not found', details: userError?.message });
+    if (rpcError || !userId) {
+      return res.status(404).json({ error: 'User not found', details: rpcError?.message });
     }
 
-    console.log('Found user ID:', user.id);
+    console.log('Found user ID:', userId);
 
     // Get all raw emails for this user that have been processed
     const { data: rawEmails, error: emailsError } = await supabase
@@ -160,7 +158,7 @@ If you cannot extract valid booking details with confidence, return:
           const { data: existingStep, error: stepError } = await supabase
             .from('travel_steps')
             .select('*')
-            .eq('user_id', user.id)
+            .eq('user_id', userId)
             .eq('confirmation_number', segment.confirmation_number)
             .single();
 
