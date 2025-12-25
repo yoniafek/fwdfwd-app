@@ -553,7 +553,8 @@ function ActionMenu({ step, onEdit, onDelete, onMoveToTrip, trips, isSharedView,
                   <div className="px-4 py-1 text-xs text-stone-400 uppercase tracking-wide">
                     Move to trip
                   </div>
-                  {trips.map(trip => (
+                  {/* Filter out the step's current trip - moving to same trip does nothing */}
+                  {trips.filter(t => t.id !== step.trip_id).map(trip => (
                     <button
                       key={trip.id}
                       onClick={() => {

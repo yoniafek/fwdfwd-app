@@ -171,10 +171,14 @@ export default function HomePage() {
   }
 
   async function handleMoveToTrip(stepId, tripId) {
+    const step = travelSteps.find(s => s.id === stepId);
+    if (!step) return;
+    
+    // Save the source trip ID before moving (for updating/cleanup)
+    const oldTripId = step.trip_id;
+    
     if (tripId === null) {
       // Create a new trip for this step
-      const step = travelSteps.find(s => s.id === stepId);
-      if (!step) return;
       try {
         // Create trip with placeholder name (will be updated immediately)
         const newTrip = await createTrip(user.id, {
@@ -191,6 +195,7 @@ export default function HomePage() {
         setTravelSteps(prev => prev.map(s => s.id === stepId ? { ...s, trip_id: newTrip.id } : s));
       } catch (error) {
         console.error('Error creating trip:', error);
+        return; // Don't continue to source trip cleanup on error
       }
     } else {
       // Move to existing trip
@@ -198,13 +203,41 @@ export default function HomePage() {
         await moveTravelStepToTrip(stepId, tripId);
         setTravelSteps(prev => prev.map(s => s.id === stepId ? { ...s, trip_id: tripId } : s));
         
-        // Auto-update the trip name based on its new contents
+        // Auto-update the destination trip name based on its new contents
         const updatedTrip = await updateTripNameFromSteps(tripId);
         if (updatedTrip) {
           setTrips(prev => prev.map(t => t.id === tripId ? { ...t, name: updatedTrip.name } : t));
         }
       } catch (error) {
         console.error('Error moving step:', error);
+        return; // Don't continue to source trip cleanup on error
+      }
+    }
+    
+    // Handle the source trip (if step was moved FROM a trip)
+    if (oldTripId) {
+      try {
+        // Check how many steps remain in the source trip
+        const remainingSteps = travelSteps.filter(s => s.trip_id === oldTripId && s.id !== stepId);
+        
+        if (remainingSteps.length === 0) {
+          // Trip is now empty - delete it
+          await deleteTrip(oldTripId);
+          setTrips(prev => prev.filter(t => t.id !== oldTripId));
+          
+          // If viewing the deleted trip, redirect to dashboard
+          if (currentView !== 'dashboard' && currentView.tripId === oldTripId) {
+            setCurrentView('dashboard');
+          }
+        } else {
+          // Trip still has steps - update its name
+          const updatedSourceTrip = await updateTripNameFromSteps(oldTripId);
+          if (updatedSourceTrip) {
+            setTrips(prev => prev.map(t => t.id === oldTripId ? { ...t, name: updatedSourceTrip.name } : t));
+          }
+        }
+      } catch (error) {
+        console.error('Error updating source trip:', error);
       }
     }
   }
